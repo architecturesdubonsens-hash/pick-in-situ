@@ -434,6 +434,58 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
   const [coupeMeta, setCoupeMeta] = useState<ViewMeta | null>(null);
   const overlaySvgRef = useRef<SVGSVGElement>(null);
 
+  // Zoom / pan blueprint
+  const [viewTransform, setViewTransform] = useState({ scale: 1, tx: 0, ty: 0 });
+  const vtRef = useRef({ scale: 1, tx: 0, ty: 0 });
+  const blueprintRef = useRef<HTMLDivElement>(null);
+  const panRef = useRef<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const el = blueprintRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      e.preventDefault();
+      const rect = el!.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const factor = e.deltaY < 0 ? 1.15 : 0.87;
+      const prev = vtRef.current;
+      const newScale = Math.min(30, Math.max(0.05, prev.scale * factor));
+      const r = newScale / prev.scale;
+      const next = { scale: newScale, tx: mx - r * (mx - prev.tx), ty: my - r * (my - prev.ty) };
+      vtRef.current = next;
+      setViewTransform(next);
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Réinitialiser zoom/pan au changement de vue
+  useEffect(() => {
+    const reset = { scale: 1, tx: 0, ty: 0 };
+    vtRef.current = reset;
+    setViewTransform(reset);
+  }, [activeView]);
+
+  function handleBlueprintMouseDown(e: React.MouseEvent<HTMLDivElement>) {
+    // Pan : bouton milieu toujours, bouton gauche hors modes interactifs
+    if (e.button === 1 || (e.button === 0 && cutPhase === "off" && !assemblyMode)) {
+      panRef.current = { x: e.clientX, y: e.clientY };
+      e.preventDefault();
+    }
+  }
+  function handleBlueprintMouseMove(e: React.MouseEvent<HTMLDivElement>) {
+    if (!panRef.current) return;
+    const dx = e.clientX - panRef.current.x;
+    const dy = e.clientY - panRef.current.y;
+    panRef.current = { x: e.clientX, y: e.clientY };
+    const prev = vtRef.current;
+    const next = { ...prev, tx: prev.tx + dx, ty: prev.ty + dy };
+    vtRef.current = next;
+    setViewTransform(next);
+  }
+  function handleBlueprintMouseUp() { panRef.current = null; }
+
   // UI
   const [loading, setLoading] = useState(true);
   const [loadMsg, setLoadMsg] = useState("Chargement…");
@@ -731,7 +783,7 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
       <svg
         ref={overlaySvgRef}
         viewBox={`0 0 ${svgW} ${svgH}`}
-        style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "all", cursor: cutPhase === "p1" || cutPhase === "p2" ? "crosshair" : "default" }}
+        style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", pointerEvents: "all", cursor: cutPhase === "p1" || cutPhase === "p2" ? "crosshair" : "grab" }}
         onClick={handleOverlayClick}
       >
         {(cutPhase === "p1" || cutPhase === "p2") && <rect x={0} y={0} width={svgW} height={svgH} fill="transparent"/>}
@@ -836,7 +888,7 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
         )}
 
         {/* Calques */}
-        {!loading && !error && allLayers.length > 0 && !assemblyMode && (
+        {!loading && !error && allLayers.length > 0 && (
           <button onClick={() => setLayerPanelOpen((v) => !v)}
             className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors"
             style={layerPanelOpen
@@ -961,8 +1013,8 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
           </div>
         )}
 
-        {/* Panel calques (gauche, mode normal) */}
-        {layerPanelOpen && !assemblyMode && (
+        {/* Panel calques (gauche) */}
+        {layerPanelOpen && (
           <div className="w-60 shrink-0 border-r border-slate-200 bg-white flex flex-col overflow-y-auto">
             <div className="p-3 border-b border-slate-100 flex items-center justify-between">
               <p className="text-xs font-semibold text-slate-600">Calques</p>
@@ -1020,7 +1072,15 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
         )}
 
         {/* Zone blueprint */}
-        <div className="flex-1 relative" style={{ background: "#0a1628" }}>
+        <div
+          ref={blueprintRef}
+          className="flex-1 relative overflow-hidden"
+          style={{ background: "#0a1628", cursor: cutPhase === "p1" || cutPhase === "p2" ? "crosshair" : "grab" }}
+          onMouseDown={handleBlueprintMouseDown}
+          onMouseMove={handleBlueprintMouseMove}
+          onMouseUp={handleBlueprintMouseUp}
+          onMouseLeave={handleBlueprintMouseUp}
+        >
           {loading ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400">
               <div className="w-8 h-8 border-2 border-slate-600 border-t-cyan-400 rounded-full animate-spin mb-3"/>
@@ -1029,15 +1089,28 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
           ) : error ? (
             <div className="absolute inset-0 flex items-center justify-center text-red-400 text-sm">{error}</div>
           ) : currentSVG ? (
-            <div className="w-full h-full overflow-auto relative">
+            <div
+              className="w-full h-full relative"
+              style={{ transform: `translate(${viewTransform.tx}px,${viewTransform.ty}px) scale(${viewTransform.scale})`, transformOrigin: "0 0" }}
+            >
               <div className="w-full h-full" dangerouslySetInnerHTML={{ __html: currentSVG }}/>
               {planOverlay}
             </div>
           ) : null}
 
           {!loading && !error && (
-            <div className="absolute top-3 right-3 bg-black/30 backdrop-blur text-xs text-slate-400 px-2 py-1 rounded font-mono pointer-events-none">
-              {activeViewMeta?.label(scanType) ?? ""}
+            <div className="absolute top-3 right-3 flex items-center gap-2">
+              {viewTransform.scale !== 1 && (
+                <button
+                  onClick={() => { const r = { scale: 1, tx: 0, ty: 0 }; vtRef.current = r; setViewTransform(r); }}
+                  className="bg-black/40 backdrop-blur text-xs text-slate-300 px-2 py-1 rounded hover:bg-black/60 pointer-events-auto"
+                >
+                  ↺ {Math.round(viewTransform.scale * 100)}%
+                </button>
+              )}
+              <div className="bg-black/30 backdrop-blur text-xs text-slate-400 px-2 py-1 rounded font-mono pointer-events-none">
+                {activeViewMeta?.label(scanType) ?? ""}
+              </div>
             </div>
           )}
 
