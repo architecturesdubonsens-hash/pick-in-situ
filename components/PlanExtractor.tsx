@@ -100,6 +100,7 @@ function extractCrossSection(scenes: THREE.Object3D[], cutY: number): TaggedSeg[
   const v = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
 
   for (const scene of scenes) {
+    scene.updateMatrixWorld(true);
     scene.traverse((obj) => {
       const mesh = obj as THREE.Mesh;
       if (!mesh.isMesh || !mesh.geometry) return;
@@ -179,16 +180,16 @@ function segsToSVG(
     };
   };
 
-  // Poché : sections rendues en trait épais sombre (avant les arêtes)
+  // Poché : sections rendues en trait épais (visible sur fond sombre)
   const poche = filteredSection.map((s) => {
     const { x1, y1, x2, y2 } = project(s);
-    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#0a1020" stroke-width="10" stroke-linecap="butt"/>`;
+    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#334155" stroke-width="14" stroke-linecap="butt"/>`;
   }).join("\n");
 
-  // Contour poché (filet fin par-dessus)
+  // Contour poché (filet fin cyan par-dessus)
   const pocheOutline = filteredSection.map((s) => {
     const { x1, y1, x2, y2 } = project(s);
-    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#1e3a5f" stroke-width="1.5" stroke-linecap="butt"/>`;
+    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#64748b" stroke-width="1" stroke-linecap="butt"/>`;
   }).join("\n");
 
   // Arêtes géométriques
