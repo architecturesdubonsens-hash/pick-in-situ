@@ -185,9 +185,48 @@ export function generateDXF(data: FacadeData, realWidthM = 10): string {
   return `0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n9\n$INSUNITS\n70\n4\n9\n$MEASUREMENT\n70\n1\n0\nENDSEC\n` +
     `0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n${layerSet.size}\n${layerDefs}0\nENDTAB\n0\nENDSEC\n` +
     `0\nSECTION\n2\nENTITIES\n` +
-    // Contour façade
     poly(0, 0, W, H, "MURS") +
     floorLines +
     elementEntities +
     `0\nENDSEC\n0\nEOF\n`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DXF DEPUIS PROJECTION GLB (lignes 3D projetées sur un plan 2D)
+// Chaque segment = { ax, ay, bx, by } en mètres dans le repère de la vue
+// ═══════════════════════════════════════════════════════════════════════════════
+export interface Seg2D { ax: number; ay: number; bx: number; by: number }
+
+export function generateProjectionDXF(
+  segments: Seg2D[],
+  viewLabel: string,
+  realW: number,
+  realH: number
+): string {
+  const SCALE = 20; // 1:50 → mm
+
+  function line(s: Seg2D, layer: string) {
+    // DXF Y inversé par rapport au SVG (Y=0 en bas)
+    return `0\nLINE\n8\n${layer}\n` +
+      `10\n${(s.ax * SCALE).toFixed(3)}\n20\n${((realH - s.ay) * SCALE).toFixed(3)}\n30\n0\n` +
+      `11\n${(s.bx * SCALE).toFixed(3)}\n21\n${((realH - s.by) * SCALE).toFixed(3)}\n31\n0\n`;
+  }
+
+  const layerDefs =
+    `0\nLAYER\n2\nGEOMETRIE\n70\n0\n62\n4\n6\nCONTINUOUS\n` +
+    `0\nLAYER\n2\nCOTATIONS\n70\n0\n62\n2\n6\nCONTINUOUS\n`;
+
+  // Bordure de vue
+  const border =
+    `0\nLINE\n8\nCOTATIONS\n10\n0\n20\n0\n30\n0\n11\n${(realW * SCALE).toFixed(3)}\n21\n0\n31\n0\n` +
+    `0\nLINE\n8\nCOTATIONS\n10\n${(realW * SCALE).toFixed(3)}\n20\n0\n30\n0\n11\n${(realW * SCALE).toFixed(3)}\n21\n${(realH * SCALE).toFixed(3)}\n31\n0\n` +
+    `0\nLINE\n8\nCOTATIONS\n10\n${(realW * SCALE).toFixed(3)}\n20\n${(realH * SCALE).toFixed(3)}\n30\n0\n11\n0\n21\n${(realH * SCALE).toFixed(3)}\n31\n0\n` +
+    `0\nLINE\n8\nCOTATIONS\n10\n0\n20\n${(realH * SCALE).toFixed(3)}\n30\n0\n11\n0\n21\n0\n31\n0\n`;
+
+  const title = `0\nTEXT\n8\nCOTATIONS\n10\n2\n20\n-8\n30\n0\n40\n4\n1\n${viewLabel} — 1:50\n`;
+  const entities = segments.map((s) => line(s, "GEOMETRIE")).join("") + border + title;
+
+  return `0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n9\n$INSUNITS\n70\n4\n9\n$MEASUREMENT\n70\n1\n0\nENDSEC\n` +
+    `0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n2\n${layerDefs}0\nENDTAB\n0\nENDSEC\n` +
+    `0\nSECTION\n2\nENTITIES\n${entities}0\nENDSEC\n0\nEOF\n`;
 }
