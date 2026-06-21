@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+:root {
+  --navy: #1e3a5f;
+  --navy-dark: #162d4a;
+  --orange: #F97316;
+}
+
+body {
+  background: #f1f5f9;
+  font-family: system-ui, sans-serif;
+}
