@@ -23,6 +23,9 @@ export interface Scan {
   status: ScanStatus;
   roomplan_path: string | null;
   mesh_path: string | null;
+  offset_x: number;
+  offset_y: number;
+  offset_angle: number;
   captured_at: string;
 }
 

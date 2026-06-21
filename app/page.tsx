@@ -94,7 +94,7 @@ export default function Dashboard() {
             return (
               <Link
                 key={c.id}
-                href={lastScan ? `/scan/${lastScan.id}` : `/chantier/${c.id}`}
+                href={`/chantier/${c.id}`}
                 className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 flex items-center justify-between hover:shadow-md transition-shadow"
               >
                 <div className="flex items-center gap-4">

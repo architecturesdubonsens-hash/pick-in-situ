@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pick-in-situ-web",
+      "runtimeExecutable": "C:/tmp/start-pick-in-situ.cmd",
+      "runtimeArgs": [],
+      "port": 3002
+    }
+  ]
+}
