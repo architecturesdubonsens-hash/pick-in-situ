@@ -20,12 +20,22 @@ interface TaggedSeg {
   isSection?: boolean;
 }
 
+interface TaggedFace {
+  a: THREE.Vector3;
+  b: THREE.Vector3;
+  c: THREE.Vector3;
+  layer: string;
+  color: string;
+}
+
 interface ViewMeta {
   label: (type: ScanType) => string;
   icon: string;
   canEnrich: boolean;
   project: (v: THREE.Vector3) => { u: number; v: number };
   dims: (size: THREE.Vector3) => { w: number; h: number };
+  depth: (v: THREE.Vector3) => number;
+  classifyDepth: boolean;
 }
 
 interface SceneEntry {
@@ -52,30 +62,40 @@ const VIEWS: Record<ViewKey, ViewMeta> = {
     icon: "⬛", canEnrich: false,
     project: (v) => ({ u: v.x, v: v.z }),
     dims: (s) => ({ w: s.x, h: s.z }),
+    depth: (v) => v.y,
+    classifyDepth: false,
   },
   nord:  {
     label: (t) => t === "interieur" ? "Façade int. Nord" : "Façade ext. Nord",
     icon: "⬆", canEnrich: true,
     project: (v) => ({ u: v.x, v: -v.y }),
     dims: (s) => ({ w: s.x, h: s.y }),
+    depth: (v) => -v.z,
+    classifyDepth: true,
   },
   sud:   {
     label: (t) => t === "interieur" ? "Façade int. Sud" : "Façade ext. Sud",
     icon: "⬇", canEnrich: true,
     project: (v) => ({ u: -v.x, v: -v.y }),
     dims: (s) => ({ w: s.x, h: s.y }),
+    depth: (v) => v.z,
+    classifyDepth: true,
   },
   est:   {
     label: (t) => t === "interieur" ? "Façade int. Est" : "Façade ext. Est",
     icon: "➡", canEnrich: true,
     project: (v) => ({ u: -v.z, v: -v.y }),
     dims: (s) => ({ w: s.z, h: s.y }),
+    depth: (v) => -v.x,
+    classifyDepth: true,
   },
   ouest: {
     label: (t) => t === "interieur" ? "Façade int. Ouest" : "Façade ext. Ouest",
     icon: "⬅", canEnrich: true,
     project: (v) => ({ u: v.z, v: -v.y }),
     dims: (s) => ({ w: s.z, h: s.y }),
+    depth: (v) => v.x,
+    classifyDepth: true,
   },
 };
 
@@ -149,6 +169,36 @@ function extractEdgeSegments(scene: THREE.Object3D): TaggedSeg[] {
     edges.dispose();
   });
   return segs;
+}
+
+function extractFaces(entries: SceneEntry[]): TaggedFace[] {
+  const faces: TaggedFace[] = [];
+  for (const entry of entries) {
+    entry.scene.updateMatrixWorld(true);
+    entry.scene.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.geometry) return;
+      const layer = getLayerName(mesh);
+      const geo = mesh.geometry;
+      const pos = geo.attributes.position;
+      const idx = geo.index;
+      const mat = mesh.matrixWorld;
+      const triCount = idx ? idx.count / 3 : pos.count / 3;
+      for (let t = 0; t < triCount; t++) {
+        const i0 = idx ? idx.getX(t * 3)     : t * 3;
+        const i1 = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+        const i2 = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+        faces.push({
+          a: new THREE.Vector3().fromBufferAttribute(pos, i0).applyMatrix4(mat),
+          b: new THREE.Vector3().fromBufferAttribute(pos, i1).applyMatrix4(mat),
+          c: new THREE.Vector3().fromBufferAttribute(pos, i2).applyMatrix4(mat),
+          layer,
+          color: entry.color,
+        });
+      }
+    });
+  }
+  return faces;
 }
 
 // ── Sections ──────────────────────────────────────────────────────────────────
@@ -266,12 +316,15 @@ function makeCoupeViewMeta(p1: { x: number; z: number }, p2: { x: number; z: num
   const dx = p2.x - p1.x, dz = p2.z - p1.z;
   const len = Math.sqrt(dx * dx + dz * dz);
   const ex = dx / len, ez = dz / len;
+  const nx = -ez, nz = ex;
   return {
     label: () => "✂ Coupe",
     icon: "✂",
     canEnrich: false,
     project: (v) => ({ u: ex * (v.x - p1.x) + ez * (v.z - p1.z), v: -v.y }),
     dims: (s) => ({ w: len, h: s.y }),
+    depth: (v) => nx * v.x + nz * v.z,
+    classifyDepth: true,
   };
 }
 
@@ -311,7 +364,8 @@ function segsToSVG(
   scanType: ScanType,
   visibleLayers: Set<string>,
   elements?: FacadeElement[],
-  svgW = 1000
+  svgW = 1000,
+  facesData?: { faces: TaggedFace[]; opacity: number }
 ): string {
   const filteredEdge = edgeSegs.filter((s) => visibleLayers.has(s.layer));
   const filteredSection = sectionSegs.filter((s) => visibleLayers.has(s.layer));
@@ -326,7 +380,7 @@ function segsToSVG(
   const uMin = Math.min(...pts.map((p) => p.u));
   const vMin = Math.min(...pts.map((p) => p.v));
 
-  const project = (seg: TaggedSeg) => {
+  const projectSeg = (seg: TaggedSeg) => {
     const pa = view.project(seg.a), pb = view.project(seg.b);
     return {
       x1: ((pa.u - uMin) * scaleX + pad).toFixed(1),
@@ -336,18 +390,67 @@ function segsToSVG(
     };
   };
 
+  const projectPt = (v: THREE.Vector3) => {
+    const p = view.project(v);
+    return { x: (p.u - uMin) * scaleX + pad, y: (p.v - vMin) * scaleY + pad };
+  };
+
+  // ── Faces pleines (painter's algorithm) ─────────────────────────────────
+  let faceSvg = "";
+  if (facesData && facesData.faces.length > 0) {
+    const ff = facesData.faces.filter((f) => visibleLayers.has(f.layer));
+    const limit = 8000;
+    const sample = ff.length > limit ? ff.slice(0, limit) : ff;
+    const sorted = [...sample].sort((a, b) => {
+      const da = (view.depth(a.a) + view.depth(a.b) + view.depth(a.c)) / 3;
+      const db = (view.depth(b.a) + view.depth(b.b) + view.depth(b.c)) / 3;
+      return da - db;
+    });
+    const polys = sorted.map((f) => {
+      const pa = projectPt(f.a), pb = projectPt(f.b), pc = projectPt(f.c);
+      return `<polygon points="${pa.x.toFixed(1)},${pa.y.toFixed(1)} ${pb.x.toFixed(1)},${pb.y.toFixed(1)} ${pc.x.toFixed(1)},${pc.y.toFixed(1)}" fill="${f.color}"/>`;
+    });
+    faceSvg = `<g opacity="${facesData.opacity}">${polys.join("")}</g>`;
+  }
+
+  // ── Poché section (épaisseur adaptative à l'échelle) ────────────────────
+  const pocheW = Math.max(3, Math.min(20, scaleX * 0.12)).toFixed(1);
   const poche = filteredSection.map((s) => {
-    const { x1, y1, x2, y2 } = project(s);
-    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#334155" stroke-width="14" stroke-linecap="butt"/>`;
+    const { x1, y1, x2, y2 } = projectSeg(s);
+    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#334155" stroke-width="${pocheW}" stroke-linecap="square"/>`;
   }).join("\n");
   const pocheOutline = filteredSection.map((s) => {
-    const { x1, y1, x2, y2 } = project(s);
-    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#64748b" stroke-width="1" stroke-linecap="butt"/>`;
+    const { x1, y1, x2, y2 } = projectSeg(s);
+    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#64748b" stroke-width="0.8" stroke-linecap="butt"/>`;
   }).join("\n");
-  const lines = filteredEdge.map((s) => {
-    const { x1, y1, x2, y2 } = project(s);
-    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#00e5ff" stroke-width="0.7" stroke-linecap="round"/>`;
-  }).join("\n");
+
+  // ── Arêtes : vues (plein) / masquées (pointillé) ────────────────────────
+  let visibleLines = "", hiddenLines = "";
+  if (filteredEdge.length > 0) {
+    if (!view.classifyDepth) {
+      visibleLines = filteredEdge.map((s) => {
+        const { x1, y1, x2, y2 } = projectSeg(s);
+        return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#00e5ff" stroke-width="0.7" stroke-linecap="round"/>`;
+      }).join("\n");
+    } else {
+      const depths = filteredEdge.map((s) => (view.depth(s.a) + view.depth(s.b)) / 2);
+      const sorted = [...depths].sort((a, b) => a - b);
+      const threshold = sorted[Math.floor(sorted.length * 0.45)];
+      const vis: string[] = [], hid: string[] = [];
+      filteredEdge.forEach((s, i) => {
+        const { x1, y1, x2, y2 } = projectSeg(s);
+        if (depths[i] >= threshold) {
+          vis.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#00e5ff" stroke-width="0.7" stroke-linecap="round"/>`);
+        } else {
+          hid.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#1a3a55" stroke-width="0.5" stroke-dasharray="4,3" stroke-linecap="round"/>`);
+        }
+      });
+      hiddenLines = hid.join("\n");
+      visibleLines = vis.join("\n");
+    }
+  }
+
+  // ── Overlay éléments Gemini ──────────────────────────────────────────────
   const overlay = (elements ?? []).map((el) => {
     const color = SVG_COLOR[el.type] ?? "#ffffff";
     const ex = (el.x * innerW + pad).toFixed(1), ey = (el.y * innerH + pad).toFixed(1);
@@ -356,6 +459,7 @@ function segsToSVG(
     return `<rect x="${ex}" y="${ey}" width="${ew}" height="${eh}" fill="${color}22" stroke="${color}" stroke-width="1.8" stroke-dasharray="5,3"/>
 <text x="${tx}" y="${ty}" fill="${color}" font-size="9" font-family="monospace" opacity="0.9">${el.label}</text>`;
   }).join("\n");
+
   const scaleBar = `
     <line x1="${pad}" y1="${svgH - 16}" x2="${(pad + scaleX).toFixed(1)}" y2="${svgH - 16}" stroke="#ffffff" stroke-width="1.5"/>
     <line x1="${pad}" y1="${svgH - 20}" x2="${pad}" y2="${svgH - 12}" stroke="#ffffff" stroke-width="1.5"/>
@@ -367,8 +471,9 @@ function segsToSVG(
   const grid = `<defs><pattern id="g" width="20" height="20" patternUnits="userSpaceOnUse">
     <path d="M20 0L0 0 0 20" fill="none" stroke="#111e33" stroke-width="0.4"/></pattern></defs>
   <rect width="${svgW}" height="${svgH}" fill="url(#g)"/>`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" style="background:#0a1628;width:100%;height:100%;">
-  ${grid}${poche}${pocheOutline}${lines}${overlay}${scaleBar}${label}
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" preserveAspectRatio="none" style="background:#0a1628;width:100%;height:100%;">
+  ${grid}${faceSvg}${poche}${pocheOutline}${hiddenLines}${visibleLines}${overlay}${scaleBar}${label}
 </svg>`;
 }
 
@@ -433,6 +538,10 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
   const [coupeSectionSegs, setCoupeSectionSegs] = useState<TaggedSeg[]>([]);
   const [coupeMeta, setCoupeMeta] = useState<ViewMeta | null>(null);
   const overlaySvgRef = useRef<SVGSVGElement>(null);
+
+  // Faces pleines
+  const [allFaces, setAllFaces] = useState<TaggedFace[]>([]);
+  const [facesOpacity, setFacesOpacity] = useState(0.85);
 
   // Zoom / pan blueprint
   const [viewTransform, setViewTransform] = useState({ scale: 1, tx: 0, ty: 0 });
@@ -544,6 +653,7 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
       sceneEntriesRef.current = entries;
       setScanOffsets(initOffsets);
       setEdgeSegs(allEdge);
+      setAllFaces(extractFaces(entries));
       setSectionSegs(extractCrossSection(scenes, initCutY));
       setBox(combined);
       setAllLayers(layers);
@@ -599,6 +709,7 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
       }
       const scenes = sceneEntriesRef.current.map((e) => e.scene);
       setEdgeSegs(allEdge);
+      setAllFaces(extractFaces(sceneEntriesRef.current));
       setBox(combined);
       setSectionSegs(extractCrossSection(scenes, combined.min.y + cutHeightRef.current));
     }, 500);
@@ -685,14 +796,18 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
   const hasEnrichment = activeView !== "coupe" && !!enrichments[activeView as ViewKey]?.length;
   const hiddenCount = allLayers.length - visibleLayers.size;
 
+  const facesPayload = allFaces.length > 0 ? { faces: allFaces, opacity: facesOpacity } : undefined;
+
   const currentSVG = (!loading && !error && box && edgeSegs.length && activeViewMeta)
     ? activeView === "coupe"
-      ? segsToSVG(coupeEdgeSegs, coupeSectionSegs, activeViewMeta, box, scanType, visibleLayers)
+      ? segsToSVG(coupeEdgeSegs, coupeSectionSegs, activeViewMeta, box, scanType, visibleLayers, undefined, 1000, facesPayload)
       : segsToSVG(
           edgeSegs,
           activeView === "plan" ? sectionSegs : [],
           activeViewMeta, box, scanType, visibleLayers,
-          activeView !== "plan" ? enrichments[activeView] : undefined
+          activeView !== "plan" ? enrichments[activeView] : undefined,
+          1000,
+          facesPayload
         )
     : null;
 
@@ -911,6 +1026,17 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
               onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && v >= 0.2 && v <= 2.5) setCutHeight(v); }}
               className="w-14 border border-slate-200 rounded px-1.5 py-0.5 text-xs font-mono text-slate-700 bg-white text-right focus:outline-none focus:border-cyan-400"/>
             <span className="text-xs text-slate-400">m</span>
+          </div>
+        )}
+
+        {/* Opacité des faces */}
+        {!loading && !error && allFaces.length > 0 && (
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-slate-200 bg-slate-50" title="Opacité des faces">
+            <span className="text-xs text-slate-400">◼</span>
+            <input type="range" min={0} max={1} step={0.05} value={facesOpacity}
+              onChange={(e) => setFacesOpacity(parseFloat(e.target.value))}
+              className="w-16 accent-cyan-500"/>
+            <span className="text-xs text-slate-400 font-mono w-7">{Math.round(facesOpacity * 100)}%</span>
           </div>
         )}
 
