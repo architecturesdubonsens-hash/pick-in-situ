@@ -562,7 +562,7 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
           activeView === "plan" ? sectionSegs : [],
           activeViewMeta,
           box, scanType, visibleLayers,
-          activeView !== "plan" && activeView !== "coupe" ? enrichments[activeView as ViewKey] : undefined
+          activeView !== "plan" ? enrichments[activeView] : undefined
         )
     : null;
 
