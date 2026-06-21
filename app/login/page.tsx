@@ -32,8 +32,16 @@ export default function LoginPage() {
       else router.replace("/");
     } else {
       const { error: err } = await supabase.auth.signUp({ email, password });
-      if (err) setError(err.message);
-      else setInfo("Vérifiez votre email pour confirmer votre compte.");
+      if (err?.status === 422) {
+        // Compte déjà existant (ex: créé sur une autre app) → connexion directe
+        const { error: loginErr } = await supabase.auth.signInWithPassword({ email, password });
+        if (loginErr) setError("Compte déjà existant — utilisez l'onglet Connexion.");
+        else router.replace("/");
+      } else if (err) {
+        setError(err.message);
+      } else {
+        setInfo("Vérifiez votre email pour confirmer votre compte.");
+      }
     }
     setLoading(false);
   }
