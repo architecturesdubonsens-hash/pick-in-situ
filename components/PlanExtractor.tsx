@@ -504,7 +504,19 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
               onChange={(e) => setCutHeight(parseFloat(e.target.value))}
               className="w-20 accent-cyan-500"
             />
-            <span className="text-xs font-mono text-slate-600 w-10">{cutHeight.toFixed(1)} m</span>
+            <input
+              type="number"
+              min={0.2}
+              max={2.5}
+              step={0.05}
+              value={cutHeight}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (!isNaN(v) && v >= 0.2 && v <= 2.5) setCutHeight(v);
+              }}
+              className="w-14 border border-slate-200 rounded px-1.5 py-0.5 text-xs font-mono text-slate-700 bg-white text-right focus:outline-none focus:border-cyan-400"
+            />
+            <span className="text-xs text-slate-400">m</span>
           </div>
         )}
 
