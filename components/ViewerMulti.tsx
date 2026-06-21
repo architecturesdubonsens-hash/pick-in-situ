@@ -255,7 +255,7 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
             })}
 
             <button
-              onClick={() => updateOffset(selOff.id, "x", 0) || updateOffset(selOff.id, "y", 0) || updateOffset(selOff.id, "angle", 0)}
+              onClick={() => { updateOffset(selOff.id, "x", 0); updateOffset(selOff.id, "y", 0); updateOffset(selOff.id, "angle", 0); }}
               className="text-xs text-slate-400 hover:text-slate-600 underline mt-auto"
             >
               Remettre à zéro

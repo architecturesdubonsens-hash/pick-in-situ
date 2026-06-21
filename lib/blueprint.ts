@@ -19,7 +19,7 @@ export interface FacadeData {
 }
 
 // ─── Couleurs SVG par type ────────────────────────────────────────────────────
-const SVG_COLOR: Record<string, string> = {
+export const SVG_COLOR: Record<string, string> = {
   window:  "#00e5ff",
   door:    "#f97316",
   garage:  "#f97316",
@@ -201,32 +201,53 @@ export function generateProjectionDXF(
   segments: Seg2D[],
   viewLabel: string,
   realW: number,
-  realH: number
+  realH: number,
+  elements?: FacadeElement[]
 ): string {
   const SCALE = 20; // 1:50 → mm
 
-  function line(s: Seg2D, layer: string) {
-    // DXF Y inversé par rapport au SVG (Y=0 en bas)
+  function dxfLine(s: Seg2D, layer: string) {
     return `0\nLINE\n8\n${layer}\n` +
       `10\n${(s.ax * SCALE).toFixed(3)}\n20\n${((realH - s.ay) * SCALE).toFixed(3)}\n30\n0\n` +
       `11\n${(s.bx * SCALE).toFixed(3)}\n21\n${((realH - s.by) * SCALE).toFixed(3)}\n31\n0\n`;
   }
 
-  const layerDefs =
-    `0\nLAYER\n2\nGEOMETRIE\n70\n0\n62\n4\n6\nCONTINUOUS\n` +
-    `0\nLAYER\n2\nCOTATIONS\n70\n0\n62\n2\n6\nCONTINUOUS\n`;
+  function dxfRect(x1m: number, y1m: number, x2m: number, y2m: number, layer: string, label: string) {
+    // y1m = top (SVG), y2m = bottom (SVG) → invertir pour DXF
+    const ax = (x1m * SCALE).toFixed(3); const bx = (x2m * SCALE).toFixed(3);
+    const ay = ((realH - y2m) * SCALE).toFixed(3); const by = ((realH - y1m) * SCALE).toFixed(3);
+    return `0\nLWPOLYLINE\n8\n${layer}\n90\n4\n70\n1\n` +
+      `10\n${ax}\n20\n${ay}\n10\n${bx}\n20\n${ay}\n10\n${bx}\n20\n${by}\n10\n${ax}\n20\n${by}\n` +
+      `0\nTEXT\n8\n${layer}\n10\n${ax}\n20\n${by}\n30\n0\n40\n2\n1\n${label}\n`;
+  }
 
-  // Bordure de vue
+  const hasElements = elements && elements.length > 0;
+  const layerCount = hasElements ? 4 : 2;
+  const extraLayers = hasElements
+    ? `0\nLAYER\n2\nFENETRES\n70\n0\n62\n4\n6\nCONTINUOUS\n` +
+      `0\nLAYER\n2\nPORTES\n70\n0\n62\n30\n6\nCONTINUOUS\n`
+    : "";
+  const layerDefs =
+    `0\nLAYER\n2\nGEOMETRIE\n70\n0\n62\n8\n6\nCONTINUOUS\n` +
+    `0\nLAYER\n2\nCOTATIONS\n70\n0\n62\n2\n6\nCONTINUOUS\n` +
+    extraLayers;
+
   const border =
     `0\nLINE\n8\nCOTATIONS\n10\n0\n20\n0\n30\n0\n11\n${(realW * SCALE).toFixed(3)}\n21\n0\n31\n0\n` +
     `0\nLINE\n8\nCOTATIONS\n10\n${(realW * SCALE).toFixed(3)}\n20\n0\n30\n0\n11\n${(realW * SCALE).toFixed(3)}\n21\n${(realH * SCALE).toFixed(3)}\n31\n0\n` +
     `0\nLINE\n8\nCOTATIONS\n10\n${(realW * SCALE).toFixed(3)}\n20\n${(realH * SCALE).toFixed(3)}\n30\n0\n11\n0\n21\n${(realH * SCALE).toFixed(3)}\n31\n0\n` +
     `0\nLINE\n8\nCOTATIONS\n10\n0\n20\n${(realH * SCALE).toFixed(3)}\n30\n0\n11\n0\n21\n0\n31\n0\n`;
 
-  const title = `0\nTEXT\n8\nCOTATIONS\n10\n2\n20\n-8\n30\n0\n40\n4\n1\n${viewLabel} — 1:50\n`;
-  const entities = segments.map((s) => line(s, "GEOMETRIE")).join("") + border + title;
+  const title = `0\nTEXT\n8\nCOTATIONS\n10\n2\n20\n-8\n30\n0\n40\n4\n1\n${viewLabel} 1:50\n`;
+
+  const elementEntities = (elements ?? []).map((el) => {
+    const layer = (el.type === "window" || el.type === "arch") ? "FENETRES" : "PORTES";
+    return dxfRect(el.x * realW, el.y * realH, (el.x + el.width) * realW, (el.y + el.height) * realH, layer, el.label);
+  }).join("");
+
+  const entities = segments.map((s) => dxfLine(s, "GEOMETRIE")).join("") + border + title + elementEntities;
 
   return `0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n9\n$INSUNITS\n70\n4\n9\n$MEASUREMENT\n70\n1\n0\nENDSEC\n` +
-    `0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n2\n${layerDefs}0\nENDTAB\n0\nENDSEC\n` +
+    `0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n${layerCount}\n${layerDefs}0\nENDTAB\n0\nENDSEC\n` +
     `0\nSECTION\n2\nENTITIES\n${entities}0\nENDSEC\n0\nEOF\n`;
 }
