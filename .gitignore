@@ -1,0 +1,31 @@
+# ── Web / Next.js ──────────────────────────────────────────
+web/node_modules/
+web/.next/
+web/out/
+web/build/
+web/.env.local
+web/.env*.local
+web/*.tsbuildinfo
+web/next-env.d.ts
+web/.vercel
+web/npm-debug.log*
+web/yarn-debug.log*
+web/yarn-error.log*
+
+# ── iOS / Xcode ────────────────────────────────────────────
+ios/build/
+ios/DerivedData/
+ios/*.xcworkspace/xcuserdata/
+ios/Pods/
+**/*.xcuserstate
+**/*.xcbkptlist
+
+# ── Système ────────────────────────────────────────────────
+.DS_Store
+desktop.ini
+Thumbs.db
+*.pem
+
+# ── Supabase local ─────────────────────────────────────────
+supabase/.branches/
+supabase/.temp/
