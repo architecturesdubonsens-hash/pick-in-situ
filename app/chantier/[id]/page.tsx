@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { supabase, type Chantier, type Scan } from "@/lib/supabase";
+import { db, type Chantier, type Scan } from "@/lib/supabase";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import type { ScanLayer } from "@/components/ViewerMulti";
 
@@ -26,8 +26,8 @@ export default function ChantierPage({ params }: { params: Promise<{ id: string 
     if (authLoading) return;
     async function load() {
       const [{ data: c, error: ce }, { data: s, error: se }] = await Promise.all([
-        supabase.from("chantiers").select("*").eq("id", id).single(),
-        supabase.from("scans").select("*").eq("chantier_id", id).order("captured_at", { ascending: true }),
+        db.from("chantiers").select("*").eq("id", id).single(),
+        db.from("scans").select("*").eq("chantier_id", id).order("captured_at", { ascending: true }),
       ]);
       if (ce || se) { setError((ce ?? se)!.message); setLoading(false); return; }
       setChantier(c as Chantier);
@@ -50,6 +50,7 @@ export default function ChantierPage({ params }: { params: Promise<{ id: string 
     meshPath: s.mesh_path,
     offsetX: s.offset_x,
     offsetY: s.offset_y,
+    offsetZ: s.offset_z ?? 0,
     angle: s.offset_angle,
   }));
 

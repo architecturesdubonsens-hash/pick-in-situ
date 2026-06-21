@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { supabase } from "@/lib/supabase";
+import { supabase, db } from "@/lib/supabase";
 
 export interface ScanLayer {
   id: string;
@@ -12,6 +12,7 @@ export interface ScanLayer {
   meshPath: string | null;
   offsetX: number;
   offsetY: number;
+  offsetZ: number;
   angle: number;  // degrés
 }
 
@@ -24,6 +25,7 @@ interface ScanOffset {
   id: string;
   x: number;
   y: number;
+  z: number;
   angle: number;
 }
 
@@ -33,7 +35,7 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
   const meshMapRef = useRef<Map<string, THREE.Group>>(new Map());
 
   const [offsets, setOffsets] = useState<ScanOffset[]>(
-    scans.map((s) => ({ id: s.id, x: s.offsetX, y: s.offsetY, angle: s.angle }))
+    scans.map((s) => ({ id: s.id, x: s.offsetX, y: s.offsetY, z: s.offsetZ ?? 0, angle: s.angle }))
   );
   const [selected, setSelected] = useState<string | null>(scans[0]?.id ?? null);
   const [saving, setSaving] = useState(false);
@@ -41,18 +43,18 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set(scans.map((s) => s.id)));
 
   const getOffset = useCallback(
-    (id: string) => offsets.find((o) => o.id === id) ?? { id, x: 0, y: 0, angle: 0 },
+    (id: string) => offsets.find((o) => o.id === id) ?? { id, x: 0, y: 0, z: 0, angle: 0 },
     [offsets]
   );
 
   // Applique l'offset 3D à un mesh chargé
   function applyOffset(group: THREE.Group, off: ScanOffset) {
-    group.position.set(off.x, 0, off.y);
+    group.position.set(off.x, off.z, off.y);
     group.rotation.y = (off.angle * Math.PI) / 180;
   }
 
   // Met à jour offset state + mesh 3D
-  function updateOffset(id: string, key: "x" | "y" | "angle", val: number) {
+  function updateOffset(id: string, key: "x" | "y" | "z" | "angle", val: number) {
     setOffsets((prev) => {
       const next = prev.map((o) => (o.id === id ? { ...o, [key]: val } : o));
       const updated = next.find((o) => o.id === id)!;
@@ -123,7 +125,7 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
               (child as THREE.Mesh).material = mat;
             }
           });
-          const off = offsets.find((o) => o.id === scan.id) ?? { id: scan.id, x: 0, y: 0, angle: 0 };
+          const off = offsets.find((o) => o.id === scan.id) ?? { id: scan.id, x: 0, y: 0, z: 0, angle: 0 };
           applyOffset(group, off);
           scene.add(group);
           meshMapRef.current.set(scan.id, group);
@@ -172,9 +174,9 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
     setSaving(true);
     await Promise.all(
       offsets.map((o) =>
-        supabase
+        db
           .from("scans")
-          .update({ offset_x: o.x, offset_y: o.y, offset_angle: o.angle })
+          .update({ offset_x: o.x, offset_y: o.y, offset_z: o.z, offset_angle: o.angle })
           .eq("id", o.id)
       )
     );
@@ -221,16 +223,16 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
               Position · {selScan.nom}
             </p>
 
-            {(["x", "y", "angle"] as const).map((key) => {
-              const labels = { x: "X (m)", y: "Y (m)", angle: "Rotation (°)" };
-              const mins = { x: -20, y: -20, angle: -180 };
-              const maxs = { x: 20, y: 20, angle: 180 };
-              const steps = { x: 0.1, y: 0.1, angle: 1 };
+            {(["x", "y", "z", "angle"] as const).map((key) => {
+              const labels = { x: "X (m)", y: "Y (m)", z: "Z — hauteur (m)", angle: "Rotation (°)" };
+              const mins = { x: -20, y: -20, z: -10, angle: -180 };
+              const maxs = { x: 20, y: 20, z: 10, angle: 180 };
+              const steps = { x: 0.1, y: 0.1, z: 0.05, angle: 1 };
               return (
                 <div key={key}>
                   <div className="flex justify-between text-xs mb-1">
                     <span className="text-slate-500">{labels[key]}</span>
-                    <span className="font-mono text-slate-700">{selOff[key].toFixed(key === "angle" ? 0 : 2)}</span>
+                    <span className="font-mono text-slate-700">{selOff[key].toFixed(key === "angle" ? 0 : key === "z" ? 2 : 2)}</span>
                   </div>
                   <input
                     type="range"
@@ -255,7 +257,7 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
             })}
 
             <button
-              onClick={() => { updateOffset(selOff.id, "x", 0); updateOffset(selOff.id, "y", 0); updateOffset(selOff.id, "angle", 0); }}
+              onClick={() => { updateOffset(selOff.id, "x", 0); updateOffset(selOff.id, "y", 0); updateOffset(selOff.id, "z", 0); updateOffset(selOff.id, "angle", 0); }}
               className="text-xs text-slate-400 hover:text-slate-600 underline mt-auto"
             >
               Remettre à zéro
