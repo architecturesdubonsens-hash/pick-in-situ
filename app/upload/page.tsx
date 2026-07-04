@@ -2,8 +2,21 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { supabase, type Chantier } from "@/lib/supabase";
+import { supabase, db, type Chantier } from "@/lib/supabase";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
+
+// Relevés photogrammétriques BC-Archi (bc-archi-v2.vercel.app) — autre projet Supabase.
+// Lecture seule avec la clé anon publique : on liste les relevés terminés qui ont un
+// mesh GLB, on télécharge le GLB puis il suit le circuit d'upload normal (pis-scans).
+const BC_SUPA_URL = "https://fnfrusblyzndbzckkfir.supabase.co";
+const BC_SUPA_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZuZnJ1c2JseXpuZGJ6Y2trZmlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1MzA4NDcsImV4cCI6MjA4MzEwNjg0N30.LBIKt0VPkd6gAhBVFuqLDx8f1236yc4W7WKOUuHK3Ts";
+
+interface ReleveBC {
+  id: string;
+  nom: string;
+  created_at: string;
+  fichiers: { glb?: string } | null;
+}
 
 export default function UploadPage() {
   const { loading: authLoading } = useRequireAuth();
@@ -21,9 +34,56 @@ export default function UploadPage() {
   const [nomChantier, setNomChantier] = useState("");
   const [adresse, setAdresse] = useState("");
 
+  // Import depuis un relevé photogrammétrique BC-Archi
+  const [bcOpen, setBcOpen] = useState(false);
+  const [bcReleves, setBcReleves] = useState<ReleveBC[]>([]);
+  const [bcLoading, setBcLoading] = useState(false);
+  const [bcDownloading, setBcDownloading] = useState<string | null>(null);
+
+  async function openBcList() {
+    setBcOpen(!bcOpen);
+    if (bcReleves.length || bcLoading) return;
+    setBcLoading(true);
+    try {
+      const r = await fetch(
+        `${BC_SUPA_URL}/rest/v1/releves?select=id,nom,created_at,fichiers&statut=eq.completed&order=created_at.desc&limit=50`,
+        { headers: { apikey: BC_SUPA_ANON, Authorization: `Bearer ${BC_SUPA_ANON}` } }
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const rows = (await r.json()) as ReleveBC[];
+      setBcReleves(rows.filter((x) => x.fichiers?.glb));
+    } catch (e) {
+      setError(`Relevés BC-Archi inaccessibles : ${(e as Error).message}`);
+    } finally {
+      setBcLoading(false);
+    }
+  }
+
+  async function importFromBc(rel: ReleveBC) {
+    if (!rel.fichiers?.glb || bcDownloading) return;
+    setBcDownloading(rel.id);
+    setError(null);
+    try {
+      const r = await fetch(
+        `${BC_SUPA_URL}/storage/v1/object/authenticated/releves/${rel.fichiers.glb}`,
+        { headers: { apikey: BC_SUPA_ANON, Authorization: `Bearer ${BC_SUPA_ANON}` } }
+      );
+      if (!r.ok) throw new Error(`téléchargement GLB : HTTP ${r.status}`);
+      const blob = await r.blob();
+      const f = new File([blob], `releve-bc-${rel.id.slice(0, 8)}.glb`, { type: "model/gltf-binary" });
+      setFile(f);
+      if (!nomScan) setNomScan(rel.nom || `Relevé extérieur ${rel.id.slice(0, 8)}`);
+      setBcOpen(false);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBcDownloading(null);
+    }
+  }
+
   useEffect(() => {
     if (authLoading) return;
-    supabase
+    db
       .from("chantiers")
       .select("*")
       .order("created_at", { ascending: false })
@@ -54,7 +114,7 @@ export default function UploadPage() {
       // Créer le chantier si besoin
       if (chantierId === "__new__") {
         setProgress(10);
-        const { data: c, error: ce } = await supabase
+        const { data: c, error: ce } = await db
           .from("chantiers")
           .insert({ nom: nomChantier.trim(), adresse: adresse.trim() || null })
           .select("id")
@@ -66,7 +126,7 @@ export default function UploadPage() {
       // Créer le scan
       setProgress(20);
       const scanNom = nomScan.trim() || file.name;
-      const { data: scan, error: se } = await supabase
+      const { data: scan, error: se } = await db
         .from("scans")
         .insert({ chantier_id: finalChantierId, nom: scanNom, status: "processing" })
         .select("id")
@@ -84,7 +144,7 @@ export default function UploadPage() {
 
       // Mettre à jour le scan
       setProgress(85);
-      await supabase.from("scans").update({ mesh_path: meshPath, status: "ready" }).eq("id", scan.id);
+      await db.from("scans").update({ mesh_path: meshPath, status: "ready" }).eq("id", scan.id);
 
       setProgress(100);
       router.push(`/chantier/${finalChantierId}`);
@@ -108,7 +168,8 @@ export default function UploadPage() {
         Importer un scan
       </h1>
       <p className="text-slate-500 text-sm mb-8">
-        Exportez depuis Polycam au format <strong>glTF / GLB</strong>, puis déposez-le ici.
+        Exportez depuis <strong>Polycam</strong> ou <strong>Scaniverse</strong> (gratuit) au format <strong>glTF / GLB</strong>, puis déposez-le ici —
+        ou récupérez directement le maillage d&apos;un relevé photogrammétrique BC-Archi.
       </p>
 
       {/* Zone drop */}
@@ -144,6 +205,45 @@ export default function UploadPage() {
             <div className="text-4xl mb-3 opacity-30">📂</div>
             <p className="text-slate-600 font-medium">Déposez votre fichier .glb ici</p>
             <p className="text-slate-400 text-sm mt-1">ou cliquez pour parcourir</p>
+          </div>
+        )}
+      </div>
+
+      {/* Source alternative : relevé photogrammétrique BC-Archi */}
+      <div className="mb-6">
+        <button
+          onClick={openBcList}
+          className="text-sm font-medium underline-offset-2 hover:underline"
+          style={{ color: "var(--navy)" }}
+        >
+          📡 …ou importer le mesh d&apos;un relevé photogrammétrique BC-Archi {bcOpen ? "▴" : "▾"}
+        </button>
+        {bcOpen && (
+          <div className="mt-3 border border-slate-200 rounded-xl divide-y divide-slate-100 max-h-64 overflow-y-auto bg-white">
+            {bcLoading && <div className="p-4 text-sm text-slate-400">Chargement des relevés…</div>}
+            {!bcLoading && bcReleves.length === 0 && (
+              <div className="p-4 text-sm text-slate-400">
+                Aucun relevé terminé avec maillage GLB. (Le maillage doit être activé dans les options du relevé.)
+              </div>
+            )}
+            {bcReleves.map((rel) => (
+              <button
+                key={rel.id}
+                onClick={() => importFromBc(rel)}
+                disabled={!!bcDownloading}
+                className="w-full flex items-center justify-between gap-3 px-4 py-2.5 text-left text-sm hover:bg-slate-50 disabled:opacity-50"
+              >
+                <span>
+                  <span className="font-medium text-slate-800">{rel.nom || rel.id.slice(0, 8)}</span>
+                  <span className="text-slate-400 ml-2 text-xs">
+                    {new Date(rel.created_at).toLocaleDateString("fr-FR")} · {rel.id.slice(0, 8)}…
+                  </span>
+                </span>
+                <span className="text-xs" style={{ color: "var(--orange)" }}>
+                  {bcDownloading === rel.id ? "Téléchargement…" : "Importer →"}
+                </span>
+              </button>
+            ))}
           </div>
         )}
       </div>
@@ -239,7 +339,7 @@ export default function UploadPage() {
       </button>
 
       <p className="text-center text-xs text-slate-400 mt-4">
-        Export Polycam : onglet Partager → Format → glTF · Qualité → Medium ou High
+        Polycam : Partager → Format → glTF · Qualité Medium/High &nbsp;·&nbsp; Scaniverse : Share → Export Model → GLB
       </p>
     </div>
   );
