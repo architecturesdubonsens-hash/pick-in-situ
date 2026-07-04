@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { db, type Chantier, type Scan } from "@/lib/supabase";
+import { supabase, db, type Chantier, type Scan } from "@/lib/supabase";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 
 interface ChantierWithScans extends Chantier {
@@ -21,6 +21,31 @@ export default function Dashboard() {
   const [chantiers, setChantiers] = useState<ChantierWithScans[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  // Supprime un chantier : fichiers 3D du storage, scans, puis le chantier
+  async function supprimerChantier(c: ChantierWithScans) {
+    if (deleting) return;
+    const n = c.scans.length;
+    if (!confirm(`Supprimer le chantier « ${c.nom} »${n ? ` et ses ${n} scan${n > 1 ? "s" : ""}` : ""} ?\nLes fichiers 3D seront effacés définitivement.`)) return;
+    setDeleting(c.id);
+    try {
+      const { data: rows, error: se } = await db
+        .from("scans").select("mesh_path").eq("chantier_id", c.id);
+      if (se) throw new Error(se.message);
+      const paths = (rows ?? []).map((r) => r.mesh_path).filter(Boolean) as string[];
+      if (paths.length) await supabase.storage.from("pis-scans").remove(paths);
+      const { error: de } = await db.from("scans").delete().eq("chantier_id", c.id);
+      if (de) throw new Error(de.message);
+      const { error: ce } = await db.from("chantiers").delete().eq("id", c.id);
+      if (ce) throw new Error(ce.message);
+      setChantiers((prev) => prev.filter((x) => x.id !== c.id));
+    } catch (e) {
+      setError(`Suppression impossible : ${(e as Error).message}`);
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   useEffect(() => {
     if (authLoading) return;
@@ -119,6 +144,14 @@ export default function Dashboard() {
                   <span className="text-slate-400 text-sm">
                     {new Date(c.created_at).toLocaleDateString("fr-FR")}
                   </span>
+                  <button
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); supprimerChantier(c); }}
+                    disabled={!!deleting}
+                    title="Supprimer ce chantier"
+                    className="text-slate-300 hover:text-red-500 transition-colors text-sm px-1"
+                  >
+                    {deleting === c.id ? "…" : "🗑"}
+                  </button>
                   <svg className="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                   </svg>

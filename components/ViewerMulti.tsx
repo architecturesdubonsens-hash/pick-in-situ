@@ -37,10 +37,34 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
   const [offsets, setOffsets] = useState<ScanOffset[]>(
     scans.map((s) => ({ id: s.id, x: s.offsetX, y: s.offsetY, z: s.offsetZ ?? 0, angle: s.angle }))
   );
+  // Copie locale : permet de retirer une pièce supprimée sans recharger la page
+  const [layers, setLayers] = useState<ScanLayer[]>(scans);
   const [selected, setSelected] = useState<string | null>(scans[0]?.id ?? null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set(scans.map((s) => s.id)));
+
+  // Supprime un scan : ligne en base + fichier mesh du storage + retrait de la scène
+  async function supprimerScan(s: ScanLayer) {
+    if (deleting) return;
+    if (!confirm(`Supprimer « ${s.nom} » de ce chantier ?\nLe fichier 3D sera effacé définitivement.`)) return;
+    setDeleting(s.id);
+    try {
+      const { error } = await db.from("scans").delete().eq("id", s.id);
+      if (error) throw new Error(error.message);
+      if (s.meshPath) await supabase.storage.from("pis-scans").remove([s.meshPath]);
+      const group = meshMapRef.current.get(s.id);
+      if (group && sceneRef.current) sceneRef.current.remove(group);
+      meshMapRef.current.delete(s.id);
+      setLayers((prev) => prev.filter((l) => l.id !== s.id));
+      if (selected === s.id) setSelected(null);
+    } catch (e) {
+      alert(`Suppression impossible : ${(e as Error).message}`);
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   const getOffset = useCallback(
     (id: string) => offsets.find((o) => o.id === id) ?? { id, x: 0, y: 0, z: 0, angle: 0 },
@@ -120,7 +144,15 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
               const mesh = child as THREE.Mesh;
               const orig = mesh.material as THREE.MeshStandardMaterial;
               const aTexture = !!(orig && !Array.isArray(orig) && orig.map);
-              if (!aTexture) {
+              if (aTexture) {
+                // Mesh photogrammétrique : la texture photo contient déjà l'éclairage
+                // réel → matériau non-éclairé (sinon faces à l'ombre de la lumière 3D
+                // = pans tout noirs), double face (normales photogrammétrie incertaines).
+                mesh.material = new THREE.MeshBasicMaterial({
+                  map: orig.map,
+                  side: THREE.DoubleSide,
+                });
+              } else {
                 mesh.material = new THREE.MeshStandardMaterial({
                   color: COLORS[idx % COLORS.length],
                   transparent: true,
@@ -190,7 +222,7 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
   }
 
   const selOff = selected ? getOffset(selected) : null;
-  const selScan = scans.find((s) => s.id === selected);
+  const selScan = layers.find((s) => s.id === selected);
 
   return (
     <div className="flex h-full" style={{ minHeight: 520 }}>
@@ -198,24 +230,32 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
       <div className="w-64 shrink-0 border-r border-slate-200 bg-white flex flex-col overflow-y-auto">
         <div className="p-4 border-b border-slate-100">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
-            Pièces — {scans.length}
+            Pièces — {layers.length}
           </p>
           <div className="flex flex-col gap-1">
-            {scans.map((s, i) => {
+            {layers.map((s, i) => {
               const DOTS = ["🔵", "🟠", "🟢", "🟣", "🔴", "🔵"];
               return (
-                <button
+                <div
                   key={s.id}
                   onClick={() => setSelected(s.id)}
-                  className="flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-left transition-colors"
+                  className="group flex items-center gap-2 px-2 py-2 rounded-lg text-sm text-left transition-colors cursor-pointer"
                   style={selected === s.id
                     ? { background: "var(--navy)", color: "white" }
                     : { color: "#475569" }}
                 >
                   <span>{DOTS[i % DOTS.length]}</span>
-                  <span className="truncate">{s.nom}</span>
-                  {loadingIds.has(s.id) && <span className="ml-auto text-xs opacity-50">…</span>}
-                </button>
+                  <span className="truncate flex-1">{s.nom}</span>
+                  {loadingIds.has(s.id) && <span className="text-xs opacity-50">…</span>}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); supprimerScan(s); }}
+                    disabled={!!deleting}
+                    title="Supprimer cette pièce"
+                    className="opacity-0 group-hover:opacity-70 hover:!opacity-100 transition-opacity text-xs"
+                  >
+                    {deleting === s.id ? "…" : "🗑"}
+                  </button>
+                </div>
               );
             })}
           </div>
