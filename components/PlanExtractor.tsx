@@ -149,12 +149,33 @@ function getLayerName(obj: THREE.Object3D): string {
   return "Géométrie";
 }
 
+// Mesh photogrammétrique = texturé et dense. Ses "arêtes" géométriques n'ont aucun
+// sens (maillage bruité) : EdgesGeometry sortirait des centaines de milliers de
+// segments illisibles. Le plan et les façades de ces couches passent par les
+// coupes (poché), qui elles fonctionnent sur n'importe quel maillage.
+function estPhotogrammetrie(mesh: THREE.Mesh): boolean {
+  const m = mesh.material as { map?: THREE.Texture } | { map?: THREE.Texture }[];
+  const aTexture = !!(m && !Array.isArray(m) && m.map);
+  const tri = (mesh.geometry.index ? mesh.geometry.index.count : mesh.geometry.attributes.position.count) / 3;
+  return aTexture && tri > 5000;
+}
+
+function collectLayerNames(scene: THREE.Object3D): string[] {
+  const names = new Set<string>();
+  scene.traverse((obj) => {
+    const m = obj as THREE.Mesh;
+    if (m.isMesh && m.geometry) names.add(getLayerName(m));
+  });
+  return [...names];
+}
+
 function extractEdgeSegments(scene: THREE.Object3D): TaggedSeg[] {
   const segs: TaggedSeg[] = [];
   scene.updateMatrixWorld(true);
   scene.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
     if (!mesh.isMesh || !mesh.geometry) return;
+    if (estPhotogrammetrie(mesh)) return;
     const layer = getLayerName(mesh);
     const edges = new THREE.EdgesGeometry(mesh.geometry, 15);
     const pos = edges.attributes.position;
@@ -293,6 +314,78 @@ function extractVerticalSection(
     });
   }
   return segs;
+}
+
+// ── Simplification des coupes (photogrammétrie) ──────────────────────────────
+// Une coupe dans un maillage photogrammétrique produit des milliers de
+// micro-segments en zigzag. On chaîne les segments contigus en polylignes puis
+// on simplifie (Douglas-Peucker, 5 cm — calibré : mur bruité ±1,5 cm → ligne
+// exacte). Sans effet sur les coupes RoomPlan (peu de segments → retour direct).
+function douglasPeucker(pts: THREE.Vector3[], tol: number): THREE.Vector3[] {
+  if (pts.length <= 2) return pts;
+  const first = pts[0], last = pts[pts.length - 1];
+  const dir = new THREE.Vector3().subVectors(last, first);
+  const len = dir.length();
+  let maxD = -1, maxI = -1;
+  const tmp = new THREE.Vector3();
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = len < 1e-9
+      ? tmp.subVectors(pts[i], first).length()
+      : tmp.subVectors(pts[i], first).cross(dir).length() / len;
+    if (d > maxD) { maxD = d; maxI = i; }
+  }
+  if (maxD <= tol) return [first, last];
+  const left = douglasPeucker(pts.slice(0, maxI + 1), tol);
+  const right = douglasPeucker(pts.slice(maxI), tol);
+  return [...left.slice(0, -1), ...right];
+}
+
+function simplifierSections(segs: TaggedSeg[], tol = 0.05): TaggedSeg[] {
+  if (segs.length < 800) return segs;
+  const key = (v: THREE.Vector3) => `${Math.round(v.x * 100)},${Math.round(v.y * 100)},${Math.round(v.z * 100)}`;
+  const adj = new Map<string, number[]>();
+  segs.forEach((s, i) => {
+    for (const k of [key(s.a), key(s.b)]) {
+      const arr = adj.get(k);
+      if (arr) arr.push(i); else adj.set(k, [i]);
+    }
+  });
+  const used = new Array<boolean>(segs.length).fill(false);
+  const out: TaggedSeg[] = [];
+  // suit la chaîne tant que le nœud relie exactement 2 segments
+  const nextSeg = (endKey: string, cur: number): number => {
+    const cands = adj.get(endKey);
+    if (!cands || cands.length !== 2) return -1;
+    const n = cands[0] === cur ? cands[1] : cands[0];
+    return used[n] ? -1 : n;
+  };
+  for (let i = 0; i < segs.length; i++) {
+    if (used[i]) continue;
+    used[i] = true;
+    const chain: THREE.Vector3[] = [segs[i].a.clone(), segs[i].b.clone()];
+    let cur = i, endK = key(segs[i].b);
+    for (let n = nextSeg(endK, cur); n !== -1; n = nextSeg(endK, cur)) {
+      used[n] = true;
+      const s = segs[n];
+      const pt = key(s.a) === endK ? s.b : s.a;
+      chain.push(pt.clone());
+      endK = key(pt); cur = n;
+    }
+    cur = i;
+    let startK = key(segs[i].a);
+    for (let n = nextSeg(startK, cur); n !== -1; n = nextSeg(startK, cur)) {
+      used[n] = true;
+      const s = segs[n];
+      const pt = key(s.a) === startK ? s.b : s.a;
+      chain.unshift(pt.clone());
+      startK = key(pt); cur = n;
+    }
+    const simple = douglasPeucker(chain, tol);
+    for (let k = 0; k < simple.length - 1; k++) {
+      out.push({ a: simple[k], b: simple[k + 1], layer: segs[i].layer, isSection: true });
+    }
+  }
+  return out;
 }
 
 function filterSegsForSection(
@@ -643,9 +736,12 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
       }
 
       if (cancelled) return;
-      if (!allEdge.length) { setError("Aucune arête extraite."); setLoading(false); return; }
+      if (!entries.length) { setError("Aucun scan chargé."); setLoading(false); return; }
 
-      const layerSet = new Set(allEdge.map((s) => s.layer));
+      // Calques depuis les scènes (pas depuis les arêtes : un mesh photogrammétrique
+      // n'a pas d'arêtes mais ses coupes doivent rester visibles/filtrables)
+      const layerSet = new Set<string>();
+      for (const e of entries) for (const n of collectLayerNames(e.scene)) layerSet.add(n);
       const layers = [...layerSet].sort();
       const initCutY = combined.min.y + 1.0;
       const scenes = entries.map((e) => e.scene);
@@ -654,7 +750,7 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
       setScanOffsets(initOffsets);
       setEdgeSegs(allEdge);
       setAllFaces(extractFaces(entries));
-      setSectionSegs(extractCrossSection(scenes, initCutY));
+      setSectionSegs(simplifierSections(extractCrossSection(scenes, initCutY)));
       setBox(combined);
       setAllLayers(layers);
       setVisibleLayers(new Set(layers));
@@ -672,7 +768,7 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
     if (!box || !sceneEntriesRef.current.length) return;
     const timer = setTimeout(() => {
       const scenes = sceneEntriesRef.current.map((e) => e.scene);
-      setSectionSegs(extractCrossSection(scenes, box.min.y + cutHeight));
+      setSectionSegs(simplifierSections(extractCrossSection(scenes, box.min.y + cutHeight)));
     }, 300);
     return () => clearTimeout(timer);
   }, [cutHeight, box]);
@@ -711,7 +807,7 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
       setEdgeSegs(allEdge);
       setAllFaces(extractFaces(sceneEntriesRef.current));
       setBox(combined);
-      setSectionSegs(extractCrossSection(scenes, combined.min.y + cutHeightRef.current));
+      setSectionSegs(simplifierSections(extractCrossSection(scenes, combined.min.y + cutHeightRef.current)));
     }, 500);
   }
 
@@ -748,7 +844,7 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
     const meta = makeCoupeViewMeta(cutP1, cutP2);
     setCoupeMeta(meta);
     setCoupeEdgeSegs(filterSegsForSection(edgeSegs, cutP1, cutP2, lookSign));
-    setCoupeSectionSegs(extractVerticalSection(scenes, cutP1, cutP2, lookSign));
+    setCoupeSectionSegs(simplifierSections(extractVerticalSection(scenes, cutP1, cutP2, lookSign)));
     setCutPhase("off"); setCutP1(null); setCutP2(null);
     setActiveView("coupe");
   }
