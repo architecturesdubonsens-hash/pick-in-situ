@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { supabase, type Chantier, type Scan } from "@/lib/supabase";
+import { db, type Chantier, type Scan } from "@/lib/supabase";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 
 interface ChantierWithScans extends Chantier {
@@ -24,7 +24,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (authLoading) return;
-    supabase
+    db
       .from("chantiers")
       .select("*, scans(id, status)")
       .order("created_at", { ascending: false })
