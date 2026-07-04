@@ -113,16 +113,21 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
         url,
         (gltf) => {
           const group = gltf.scene;
-          // Teinte légère pour distinguer les pièces
+          // Teinte légère pour distinguer les pièces — SAUF si le mesh est texturé
+          // (relevé photogrammétrique BC-Archi) : on garde sa vraie texture photo.
           group.traverse((child) => {
             if ((child as THREE.Mesh).isMesh) {
-              const mat = new THREE.MeshStandardMaterial({
-                color: COLORS[idx % COLORS.length],
-                transparent: true,
-                opacity: 0.85,
-                roughness: 0.7,
-              });
-              (child as THREE.Mesh).material = mat;
+              const mesh = child as THREE.Mesh;
+              const orig = mesh.material as THREE.MeshStandardMaterial;
+              const aTexture = !!(orig && !Array.isArray(orig) && orig.map);
+              if (!aTexture) {
+                mesh.material = new THREE.MeshStandardMaterial({
+                  color: COLORS[idx % COLORS.length],
+                  transparent: true,
+                  opacity: 0.85,
+                  roughness: 0.7,
+                });
+              }
             }
           });
           const off = offsets.find((o) => o.id === scan.id) ?? { id: scan.id, x: 0, y: 0, z: 0, angle: 0 };
