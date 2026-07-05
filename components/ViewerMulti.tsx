@@ -38,6 +38,7 @@ interface Mur {
   epaisseur: number;
   hauteur: number;
   base_y: number;
+  decalage: number; // 0 = ligne tracée sur l'axe ; ±0.5 = ligne sur un nu (× épaisseur)
 }
 
 function murMaterial() {
@@ -50,9 +51,12 @@ function murMaterial() {
 function poserMurMesh(mesh: THREE.Mesh, m: Mur) {
   const dx = m.bx - m.ax, dz = m.bz - m.az;
   const len = Math.max(0.05, Math.hypot(dx, dz));
+  // Décalage perpendiculaire : la ligne tracée est l'axe (0) ou un nu (±0.5 × ép.)
+  const off = (m.decalage ?? 0) * m.epaisseur;
+  const nx = -dz / len, nz = dx / len;
   mesh.geometry.dispose();
   mesh.geometry = new THREE.BoxGeometry(len, m.hauteur, m.epaisseur);
-  mesh.position.set((m.ax + m.bx) / 2, m.base_y + m.hauteur / 2, (m.az + m.bz) / 2);
+  mesh.position.set((m.ax + m.bx) / 2 + nx * off, m.base_y + m.hauteur / 2, (m.az + m.bz) / 2 + nz * off);
   mesh.rotation.y = -Math.atan2(dz, dx);
 }
 
@@ -72,9 +76,25 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   const mursRef = useRef<Mur[]>([]);
   const murMeshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const draftMarkerRef = useRef<THREE.Mesh | null>(null);
+  const [murSel, setMurSel] = useState<string | null>(null);
+  const [murAlign, setMurAlign] = useState<"axe" | "face">("axe");
+  const [murBaseY, setMurBaseY] = useState(0);
+  const [pipette, setPipette] = useState(false);
+  const [murPending, setMurPending] = useState<{ a: THREE.Vector3; b: THREE.Vector3 } | null>(null);
+  const murSelRef = useRef<string | null>(null);
+  const murAlignRef = useRef<"axe" | "face">("axe");
+  const murBaseYRef = useRef(0);
+  const pipetteRef = useRef(false);
+  const murPendingRef = useRef<{ a: THREE.Vector3; b: THREE.Vector3 } | null>(null);
+  const pendingMeshRef = useRef<THREE.Mesh | null>(null);
   useEffect(() => { murModeRef.current = murMode; }, [murMode]);
   useEffect(() => { murDraftRef.current = murDraft; }, [murDraft]);
   useEffect(() => { mursRef.current = murs; }, [murs]);
+  useEffect(() => { murSelRef.current = murSel; }, [murSel]);
+  useEffect(() => { murAlignRef.current = murAlign; }, [murAlign]);
+  useEffect(() => { murBaseYRef.current = murBaseY; }, [murBaseY]);
+  useEffect(() => { pipetteRef.current = pipette; }, [pipette]);
+  useEffect(() => { murPendingRef.current = murPending; }, [murPending]);
 
   const [offsets, setOffsets] = useState<ScanOffset[]>(
     scans.map((s) => ({ id: s.id, x: s.offsetX, y: s.offsetY, z: s.offsetZ ?? 0, angle: s.angle }))
@@ -150,17 +170,22 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       let mesh = murMeshMapRef.current.get(m.id);
       if (!mesh) {
         mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), murMaterial());
+        mesh.userData.murId = m.id;
         murMeshMapRef.current.set(m.id, mesh);
         scene.add(mesh);
       }
       poserMurMesh(mesh, m);
+      const mat = mesh.material as THREE.MeshStandardMaterial;
+      const sel = m.id === murSel;
+      mat.color.setHex(sel ? 0x2563eb : 0xf97316);
+      mat.opacity = sel ? 0.75 : 0.55;
     }
-  }, [murs]);
+  }, [murs, murSel]);
 
-  async function creerMur(a: THREE.Vector3, b: THREE.Vector3) {
+  async function creerMur(a: THREE.Vector3, b: THREE.Vector3, decalage: number) {
     if (!chantierId) return;
     const row = { chantier_id: chantierId, ax: a.x, az: a.z, bx: b.x, bz: b.z,
-                  epaisseur: 0.2, hauteur: 2.7, base_y: 0 };
+                  epaisseur: 0.2, hauteur: 2.7, base_y: murBaseYRef.current, decalage };
     const { data, error } = await db.from("bim_murs").insert(row).select("*").single();
     if (error) { alert(`Mur non enregistré : ${error.message}`); return; }
     setMurs((prev) => [...prev, data as Mur]);
@@ -203,6 +228,15 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
 
   function poserPointMur(p: THREE.Vector3) {
     const scene = sceneRef.current;
+    const pending = murPendingRef.current;
+    if (pending) {
+      // 3e clic : de quel côté du nu tracé se trouve le corps du mur
+      const dx = pending.b.x - pending.a.x, dz = pending.b.z - pending.a.z;
+      const cross = dx * (p.z - pending.a.z) - dz * (p.x - pending.a.x);
+      creerMur(pending.a, pending.b, cross > 0 ? 0.5 : -0.5);
+      annulerDraft();
+      return;
+    }
     const draft = murDraftRef.current;
     if (!draft) {
       setMurDraft(p);
@@ -218,12 +252,27 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       }
       return;
     }
-    if (draft.distanceTo(p) > 0.05) creerMur(draft, p);
+    if (draft.distanceTo(p) > 0.05) {
+      if (murAlignRef.current === "face") {
+        // La ligne tracée est un nu : lame fine en aperçu, en attente du clic de côté
+        setMurPending({ a: draft.clone(), b: p.clone() });
+        if (scene) {
+          const prev = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), murMaterial());
+          poserMurMesh(prev, { id: "", ax: draft.x, az: draft.z, bx: p.x, bz: p.z,
+            epaisseur: 0.04, hauteur: 2.7, base_y: murBaseYRef.current, decalage: 0 });
+          scene.add(prev);
+          pendingMeshRef.current = prev;
+        }
+        retirerMarqueur();
+        setMurDraft(null);
+        return;
+      }
+      creerMur(draft, p, 0);
+    }
     annulerDraft();
   }
 
-  function annulerDraft() {
-    setMurDraft(null);
+  function retirerMarqueur() {
     if (draftMarkerRef.current && sceneRef.current) {
       sceneRef.current.remove(draftMarkerRef.current);
       draftMarkerRef.current.geometry.dispose();
@@ -231,8 +280,21 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     }
   }
 
+  function annulerDraft() {
+    setMurDraft(null);
+    setMurPending(null);
+    retirerMarqueur();
+    if (pendingMeshRef.current && sceneRef.current) {
+      sceneRef.current.remove(pendingMeshRef.current);
+      pendingMeshRef.current.geometry.dispose();
+      pendingMeshRef.current = null;
+    }
+  }
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { annulerDraft(); setMurMode(false); } };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { annulerDraft(); setMurMode(false); setPipette(false); setMurSel(null); }
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -275,14 +337,8 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
 
-    // Pick outil Mur : clic (pas drag) → raycast sur les scans → point accroché
-    let downPos: { x: number; y: number } | null = null;
-    const onDown = (e: PointerEvent) => { downPos = { x: e.clientX, y: e.clientY }; };
-    const onUp = (e: PointerEvent) => {
-      if (!murModeRef.current || !downPos) return;
-      const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
-      downPos = null;
-      if (moved > 5 || e.button !== 0) return;
+    // Interactions murs : tracé (clics), pipette niveau 0, sélection + déplacement (drag)
+    const makeRay = (e: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
       const mouse = new THREE.Vector2(
         ((e.clientX - rect.left) / rect.width) * 2 - 1,
@@ -290,11 +346,105 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       );
       const ray = new THREE.Raycaster();
       ray.setFromCamera(mouse, camera);
+      return ray;
+    };
+    let downPos: { x: number; y: number } | null = null;
+    let drag: { id: string; orig: Mur; start: THREE.Vector3; base: THREE.Vector3;
+                plane: THREE.Plane; dx: number; dz: number; moved: boolean } | null = null;
+
+    const onDown = (e: PointerEvent) => {
+      downPos = { x: e.clientX, y: e.clientY };
+      // Déplacement : le drag démarre sur le mur sélectionné (hors mode tracé/pipette)
+      if (murModeRef.current || pipetteRef.current || e.button !== 0) return;
+      const selId = murSelRef.current;
+      if (!selId) return;
+      const mesh = murMeshMapRef.current.get(selId);
+      const mur = mursRef.current.find((m) => m.id === selId);
+      if (!mesh || !mur) return;
+      const hit = makeRay(e).intersectObject(mesh)[0];
+      if (!hit) return;
+      drag = {
+        id: selId, orig: { ...mur }, start: hit.point.clone(), base: mesh.position.clone(),
+        plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -hit.point.y),
+        dx: 0, dz: 0, moved: false,
+      };
+      controls.enabled = false;
+    };
+
+    const onMove = (e: PointerEvent) => {
+      if (!drag) return;
+      const p = new THREE.Vector3();
+      if (!makeRay(e).ray.intersectPlane(drag.plane, p)) return;
+      drag.dx = p.x - drag.start.x;
+      drag.dz = p.z - drag.start.z;
+      if (!drag.moved && Math.hypot(drag.dx, drag.dz) < 0.01) return;
+      drag.moved = true;
+      const mesh = murMeshMapRef.current.get(drag.id);
+      if (mesh) mesh.position.set(drag.base.x + drag.dx, drag.base.y, drag.base.z + drag.dz);
+    };
+
+    const onUp = (e: PointerEvent) => {
+      if (drag) {
+        controls.enabled = true;
+        const d = drag;
+        drag = null;
+        downPos = null;
+        if (!d.moved) return;
+        let { dx, dz } = d;
+        // Accrochage au lâcher : extrémité déplacée proche d'une extrémité d'un autre mur
+        let best: { ddx: number; ddz: number } | null = null;
+        let bd = 0.25;
+        const ends: [number, number][] = [
+          [d.orig.ax + dx, d.orig.az + dz], [d.orig.bx + dx, d.orig.bz + dz],
+        ];
+        for (const [ex, ez] of ends)
+          for (const m of mursRef.current) {
+            if (m.id === d.id) continue;
+            for (const [ox, oz] of [[m.ax, m.az], [m.bx, m.bz]] as const) {
+              const dist = Math.hypot(ex - ox, ez - oz);
+              if (dist < bd) { bd = dist; best = { ddx: ox - ex, ddz: oz - ez }; }
+            }
+          }
+        if (best) { dx += best.ddx; dz += best.ddz; }
+        majMur(d.id, { ax: d.orig.ax + dx, az: d.orig.az + dz,
+                       bx: d.orig.bx + dx, bz: d.orig.bz + dz });
+        return;
+      }
+      if (!downPos) return;
+      const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
+      downPos = null;
+      if (moved > 5 || e.button !== 0) return;
+      const ray = makeRay(e);
       const cibles = [...meshMapRef.current.values()];
-      const hit = ray.intersectObjects(cibles, true)[0];
-      if (hit) poserPointMur(snapPick(hit));
+      // Pipette : le point cliqué sur le scan définit le niveau 0
+      if (pipetteRef.current) {
+        const hit = ray.intersectObjects(cibles, true)[0];
+        if (hit) setMurBaseY(Math.round(snapPick(hit).y * 100) / 100);
+        setPipette(false);
+        return;
+      }
+      if (murModeRef.current) {
+        const hit = ray.intersectObjects(cibles, true)[0];
+        if (murPendingRef.current) {
+          // 3e clic (côté du corps) : hors scan, on retombe sur le plan du niveau 0
+          let p = hit ? hit.point : null;
+          if (!p) {
+            const gp = new THREE.Vector3();
+            const plan = new THREE.Plane(new THREE.Vector3(0, 1, 0), -murBaseYRef.current);
+            if (ray.ray.intersectPlane(plan, gp)) p = gp;
+          }
+          if (p) poserPointMur(p);
+        } else if (hit) {
+          poserPointMur(snapPick(hit));
+        }
+        return;
+      }
+      // Sélection d'un mur au clic (pour l'éditer / le déplacer)
+      const wallHit = ray.intersectObjects([...murMeshMapRef.current.values()])[0];
+      setMurSel(wallHit ? ((wallHit.object.userData.murId as string) ?? null) : null);
     };
     renderer.domElement.addEventListener("pointerdown", onDown);
+    renderer.domElement.addEventListener("pointermove", onMove);
     renderer.domElement.addEventListener("pointerup", onUp);
 
     // Charger chaque GLB
@@ -373,6 +523,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       cancelAnimationFrame(raf);
       ro.disconnect();
       renderer.domElement.removeEventListener("pointerdown", onDown);
+      renderer.domElement.removeEventListener("pointermove", onMove);
       renderer.domElement.removeEventListener("pointerup", onUp);
       renderer.dispose();
       container.removeChild(renderer.domElement);
@@ -446,23 +597,62 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
               🧱 Murs — {murs.length}
             </p>
+            {/* Niveau 0 : altitude de la base des nouveaux murs */}
+            <div className="flex items-center gap-1 mb-2 text-[11px] text-slate-500">
+              <span>Niveau 0</span>
+              <input type="number" step={0.01} value={murBaseY}
+                onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) setMurBaseY(v); }}
+                className="w-16 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
+              <span>m</span>
+              <button onClick={() => setPipette(!pipette)}
+                title="Cliquer un point du scan (sol fini) pour caler le niveau 0"
+                className="ml-auto px-1.5 py-0.5 rounded border text-[11px] transition-colors"
+                style={pipette
+                  ? { background: "#f97316", color: "white", borderColor: "#f97316" }
+                  : { borderColor: "#e2e8f0", color: "#64748b" }}>🎯</button>
+            </div>
+            {/* Ligne tracée : axe du mur ou nu (face ext./int.) */}
+            <div className="flex gap-1 mb-2">
+              {(["axe", "face"] as const).map((a) => (
+                <button key={a} onClick={() => setMurAlign(a)}
+                  title={a === "axe"
+                    ? "La ligne cliquée est l'axe du mur"
+                    : "La ligne cliquée est un nu (face ext. ou int.) — un 3e clic indique de quel côté est le mur"}
+                  className="flex-1 py-1 rounded border text-[11px] transition-colors"
+                  style={murAlign === a
+                    ? { background: "var(--navy)", color: "white", borderColor: "var(--navy)" }
+                    : { borderColor: "#e2e8f0", color: "#64748b" }}>
+                  {a === "axe" ? "Axe" : "Nu (face)"}
+                </button>
+              ))}
+            </div>
             <button
               onClick={() => { if (murMode) { annulerDraft(); setMurMode(false); } else setMurMode(true); }}
               className="w-full py-1.5 rounded-lg text-xs font-medium border transition-colors mb-2"
               style={murMode
                 ? { background: "#f97316", color: "white", borderColor: "#f97316" }
                 : { borderColor: "#e2e8f0", color: "#64748b" }}>
-              {murMode ? (murDraft ? "Cliquez le 2e point…" : "Cliquez le 1er point…") : "＋ Tracer un mur"}
+              {murMode
+                ? (murPending ? "Cliquez le côté du mur…" : murDraft ? "Cliquez le 2e point…" : "Cliquez le 1er point…")
+                : "＋ Tracer un mur"}
             </button>
             <div className="flex flex-col gap-1.5">
               {murs.map((m, i) => {
                 const len = Math.hypot(m.bx - m.ax, m.bz - m.az);
+                const sel = murSel === m.id;
                 return (
-                  <div key={m.id} className="group border border-slate-100 rounded-lg px-2 py-1.5">
+                  <div key={m.id} onClick={() => setMurSel(m.id)}
+                    className="group border rounded-lg px-2 py-1.5 cursor-pointer transition-colors"
+                    style={sel ? { borderColor: "#2563eb", background: "#eff6ff" } : { borderColor: "#f1f5f9" }}>
                     <div className="flex items-center gap-2 text-xs text-slate-600">
                       <span className="font-medium">Mur {i + 1}</span>
                       <span className="font-mono text-slate-400">{len.toFixed(2)} m</span>
-                      <button onClick={() => supprimerMur(m.id)}
+                      {m.decalage !== 0 && (
+                        <button onClick={(e) => { e.stopPropagation(); majMur(m.id, { decalage: -m.decalage }); }}
+                          title="Basculer le corps du mur de l'autre côté du nu tracé"
+                          className="text-[11px] opacity-50 hover:opacity-100">⇄</button>
+                      )}
+                      <button onClick={(e) => { e.stopPropagation(); supprimerMur(m.id); }}
                         className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
                         title="Supprimer">🗑</button>
                     </div>
@@ -474,6 +664,13 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                       <span className="text-[10px] text-slate-400 ml-1">h.</span>
                       <input type="number" min={0.3} max={12} step={0.05} value={m.hauteur}
                         onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majMur(m.id, { hauteur: v }); }}
+                        className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
+                      <span className="text-[10px] text-slate-400">m</span>
+                    </div>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="text-[10px] text-slate-400">base</span>
+                      <input type="number" step={0.01} value={m.base_y}
+                        onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majMur(m.id, { base_y: v }); }}
                         className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
                       <span className="text-[10px] text-slate-400">m</span>
                     </div>
@@ -561,9 +758,21 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         </div>
         {murMode && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
-            {murDraft
+            {murPending
+              ? "🧱 Cliquez du côté du corps du mur (à l'intérieur si vous avez tracé le nu extérieur)"
+              : murDraft
               ? "🧱 Cliquez le 2e point du mur sur le scan (Échap : annuler)"
-              : "🧱 Cliquez le 1er point du mur sur le scan — accrochage sommets et extrémités de murs"}
+              : `🧱 Cliquez le 1er point ${murAlign === "face" ? "du nu" : "de l'axe"} du mur — accrochage sommets et extrémités`}
+          </div>
+        )}
+        {pipette && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
+            🎯 Cliquez un point du scan (sol fini) pour caler le niveau 0
+          </div>
+        )}
+        {!murMode && !pipette && murSel && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
+            ↔ Glissez le mur bleu pour le déplacer · Échap ou clic dans le vide pour désélectionner
           </div>
         )}
       </div>
