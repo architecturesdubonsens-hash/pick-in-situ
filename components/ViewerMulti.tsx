@@ -269,6 +269,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   const meshMapRef = useRef<Map<string, THREE.Group>>(new Map());
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const controlsRef = useRef<OrbitControls | null>(null);
 
   // ── Murs BIM ──
   const [murs, setMurs] = useState<Mur[]>([]);
@@ -327,6 +328,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   const ancresRef = useRef<Ancre[]>([]);
   const ancreMeshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const handleMeshesRef = useRef<THREE.Mesh[]>([]);
+  const murRefLineRef = useRef<THREE.Line | null>(null);
   useEffect(() => { ancreModeRef.current = ancreMode; }, [ancreMode]);
   useEffect(() => { ancresRef.current = ancres; }, [ancres]);
 
@@ -532,26 +534,52 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     }
   }, [ancres]);
 
-  // Poignées d'extrémité du mur sélectionné (sphères cyan draggables)
+  // Poignées d'édition du mur sélectionné, façon ArchiCAD : ligne de référence au
+  // pied (bleue), poignées d'extrémité jaunes, poignée de hauteur verte au sommet.
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
     for (const h of handleMeshesRef.current) { scene.remove(h); h.geometry.dispose(); }
     handleMeshesRef.current = [];
+    if (murRefLineRef.current) {
+      scene.remove(murRefLineRef.current);
+      murRefLineRef.current.geometry.dispose();
+      murRefLineRef.current = null;
+    }
     const m = murs.find((x) => x.id === murSel);
     if (!m) return;
-    const hy = m.base_y + Math.min(m.hauteur, 1.2);
+    // Ligne de référence : la ligne dessinée (axe/nu), au niveau de la base
+    const A = new THREE.Vector3(m.ax, m.base_y, m.az);
+    const B = new THREE.Vector3(m.bx, m.base_y, m.bz);
+    const refLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([A, B]),
+      new THREE.LineBasicMaterial({ color: 0x2563eb, depthTest: false })
+    );
+    refLine.renderOrder = 4;
+    scene.add(refLine);
+    murRefLineRef.current = refLine;
+    // Poignées d'extrémité (jaunes) au pied de la ligne de référence
     for (const end of ["a", "b"] as const) {
       const h = new THREE.Mesh(
-        new THREE.SphereGeometry(0.12, 16, 16),
-        new THREE.MeshBasicMaterial({ color: 0x06b6d4, depthTest: false })
+        new THREE.SphereGeometry(0.11, 16, 16),
+        new THREE.MeshBasicMaterial({ color: 0xfacc15, depthTest: false })
       );
       h.renderOrder = 5;
-      h.userData = { handleEnd: end, murId: m.id };
-      h.position.set(end === "a" ? m.ax : m.bx, hy, end === "a" ? m.az : m.bz);
+      h.userData = { handleKind: end, murId: m.id };
+      h.position.copy(end === "a" ? A : B);
       scene.add(h);
       handleMeshesRef.current.push(h);
     }
+    // Poignée de hauteur (verte) au sommet, milieu de la ligne de référence
+    const hh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.16, 0.16, 0.16),
+      new THREE.MeshBasicMaterial({ color: 0x10b981, depthTest: false })
+    );
+    hh.renderOrder = 5;
+    hh.userData = { handleKind: "h", murId: m.id };
+    hh.position.set((m.ax + m.bx) / 2, m.base_y + m.hauteur, (m.az + m.bz) / 2);
+    scene.add(hh);
+    handleMeshesRef.current.push(hh);
   }, [murSel, murs]);
 
   async function creerMur(a: THREE.Vector3, b: THREE.Vector3, decalage: number) {
@@ -1074,6 +1102,19 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
+    controls.zoomToCursor = true;   // zoom centré sur le curseur
+    controlsRef.current = controls;
+
+    // Mémorise le cadrage de la vue par chantier (retrouvé au retour sur l'app)
+    const viewKey = chantierId ? `pis-cam-${chantierId}` : null;
+    const saveView = () => {
+      if (!viewKey) return;
+      const c = camera.position, t = controls.target;
+      try {
+        localStorage.setItem(viewKey, JSON.stringify([c.x, c.y, c.z, t.x, t.y, t.z]));
+      } catch { /* quota / mode privé */ }
+    };
+    controls.addEventListener("end", saveView);
 
     // Interactions murs : tracé (clics), pipette niveau 0, sélection + déplacement (drag)
     const makeRay = (e: PointerEvent) => {
@@ -1091,7 +1132,8 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       | { kind: "move"; id: string; orig: Mur; start: THREE.Vector3; base: THREE.Vector3;
           plane: THREE.Plane; dx: number; dz: number; moved: boolean }
       | { kind: "end"; id: string; orig: Mur; end: "a" | "b"; hy: number;
-          curX: number; curZ: number; moved: boolean };
+          curX: number; curZ: number; moved: boolean }
+      | { kind: "height"; id: string; orig: Mur; plane: THREE.Plane; curH: number; moved: boolean };
     let drag: WallDrag | null = null;
 
     const onDown = (e: PointerEvent) => {
@@ -1104,12 +1146,23 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       if (!selId) return;
       const mur = mursRef.current.find((m) => m.id === selId);
       if (!mur) return;
-      // 1) poignée d'extrémité prioritaire
+      // 1) poignée prioritaire (extrémité jaune ou hauteur verte)
       const hHit = makeRay(e).intersectObjects(handleMeshesRef.current)[0];
       if (hHit) {
-        const end = hHit.object.userData.handleEnd as "a" | "b";
-        drag = { kind: "end", id: selId, orig: { ...mur }, end, hy: hHit.object.position.y,
-                 curX: end === "a" ? mur.ax : mur.bx, curZ: end === "a" ? mur.az : mur.bz, moved: false };
+        const kind = hHit.object.userData.handleKind as "a" | "b" | "h";
+        if (kind === "h") {
+          // plan vertical passant par la poignée, face à la caméra → drag en hauteur
+          const p0 = hHit.object.position.clone();
+          const nrm = camera.position.clone().sub(p0); nrm.y = 0;
+          if (nrm.lengthSq() < 1e-6) nrm.set(0, 0, 1);
+          nrm.normalize();
+          drag = { kind: "height", id: selId, orig: { ...mur },
+                   plane: new THREE.Plane().setFromNormalAndCoplanarPoint(nrm, p0),
+                   curH: mur.hauteur, moved: false };
+        } else {
+          drag = { kind: "end", id: selId, orig: { ...mur }, end: kind, hy: hHit.object.position.y,
+                   curX: kind === "a" ? mur.ax : mur.bx, curZ: kind === "a" ? mur.az : mur.bz, moved: false };
+        }
         controls.enabled = false;
         return;
       }
@@ -1140,6 +1193,21 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         if (mesh) mesh.position.set(drag.base.x + drag.dx, drag.base.y, drag.base.z + drag.dz);
         return;
       }
+      if (drag.kind === "height") {
+        const hd = drag;
+        const p = new THREE.Vector3();
+        if (!ray.ray.intersectPlane(hd.plane, p)) return;
+        const newH = Math.min(12, Math.max(0.3, p.y - hd.orig.base_y));
+        hd.curH = Math.round(newH * 100) / 100;
+        hd.moved = true;
+        const tmp: Mur = { ...hd.orig, hauteur: hd.curH };
+        const mesh = murMeshMapRef.current.get(hd.id);
+        if (mesh) poserMurMesh(mesh, tmp,
+          ouverturesRef.current.filter((o) => o.mur_id === hd.id), toitsRef.current);
+        const top = handleMeshesRef.current.find((hh) => hh.userData.handleKind === "h");
+        if (top) top.position.y = hd.orig.base_y + hd.curH;
+        return;
+      }
       // Extrémité : suit la surface du scan (accrochée) ou le plan horizontal de la poignée
       const ed = drag;
       let x: number, z: number;
@@ -1157,8 +1225,15 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       const mesh = murMeshMapRef.current.get(ed.id);
       if (mesh) poserMurMesh(mesh, tmp,
         ouverturesRef.current.filter((o) => o.mur_id === ed.id), toitsRef.current);
-      const h = handleMeshesRef.current.find((hh) => hh.userData.handleEnd === ed.end);
+      const h = handleMeshesRef.current.find((hh) => hh.userData.handleKind === ed.end);
       if (h) h.position.set(s.x, ed.hy, s.z);
+      if (murRefLineRef.current) {
+        const A = ed.end === "a" ? new THREE.Vector3(s.x, ed.orig.base_y, s.z)
+                                 : new THREE.Vector3(ed.orig.ax, ed.orig.base_y, ed.orig.az);
+        const B = ed.end === "b" ? new THREE.Vector3(s.x, ed.orig.base_y, s.z)
+                                 : new THREE.Vector3(ed.orig.bx, ed.orig.base_y, ed.orig.bz);
+        murRefLineRef.current.geometry.setFromPoints([A, B]);
+      }
     };
 
     const onUp = (e: PointerEvent) => {
@@ -1170,6 +1245,10 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         if (!d.moved) return;
         if (d.kind === "end") {
           majMur(d.id, d.end === "a" ? { ax: d.curX, az: d.curZ } : { bx: d.curX, bz: d.curZ });
+          return;
+        }
+        if (d.kind === "height") {
+          majMur(d.id, { hauteur: d.curH });
           return;
         }
         let { dx, dz } = d;
@@ -1378,6 +1457,8 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       toitMeshMapRef.current.clear();
       ancreMeshMapRef.current.clear();
       handleMeshesRef.current = [];
+      murRefLineRef.current = null;
+      controlsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1396,6 +1477,72 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     );
     setSaving(false);
     setSaved(true);
+  }
+
+  // Cadre la vue sur l'ensemble des scans chargés (ou restaure le cadrage mémorisé)
+  const didFrameRef = useRef(false);
+  function cadrerVue(force = false) {
+    const cam = cameraRef.current, controls = controlsRef.current;
+    if (!cam || !controls) return;
+    const box = new THREE.Box3();
+    for (const g of meshMapRef.current.values()) box.expandByObject(g);
+    if (box.isEmpty()) return;
+    const c = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const r = Math.max(size.x, size.y, size.z) * 0.7 + 1.5;
+    cam.position.set(c.x + r, c.y + r * 0.8, c.z + r);
+    controls.target.copy(c);
+    controls.update();
+    if (force && chantierId) {
+      try { localStorage.setItem(`pis-cam-${chantierId}`, JSON.stringify(
+        [cam.position.x, cam.position.y, cam.position.z, c.x, c.y, c.z])); } catch { /* ignore */ }
+    }
+  }
+
+  // Au premier chargement complet : restaure le cadrage mémorisé, sinon cadre auto
+  useEffect(() => {
+    if (didFrameRef.current || loadingIds.size > 0) return;
+    const cam = cameraRef.current, controls = controlsRef.current;
+    if (!cam || !controls) return;
+    didFrameRef.current = true;
+    const key = chantierId ? `pis-cam-${chantierId}` : null;
+    if (key) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw) {
+          const a = JSON.parse(raw) as number[];
+          cam.position.set(a[0], a[1], a[2]);
+          controls.target.set(a[3], a[4], a[5]);
+          controls.update();
+          return;
+        }
+      } catch { /* ignore */ }
+    }
+    cadrerVue();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingIds, chantierId]);
+
+  // Auto-sauvegarde de la position/assiette des scans (débattue), sans clic manuel
+  const firstOffsetsRef = useRef(true);
+  useEffect(() => {
+    if (firstOffsetsRef.current) { firstOffsetsRef.current = false; return; }
+    const t = setTimeout(() => { saveOffsets(); }, 900);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offsets]);
+
+  // Blocage de l'inclinaison verticale de la vue (garde l'angle de site courant)
+  const [vertLock, setVertLock] = useState(false);
+  function toggleVertLock() {
+    const c = controlsRef.current;
+    setVertLock((v) => {
+      const nv = !v;
+      if (c) {
+        if (nv) { const a = c.getPolarAngle(); c.minPolarAngle = a; c.maxPolarAngle = a; }
+        else { c.minPolarAngle = 0; c.maxPolarAngle = Math.PI; }
+      }
+      return nv;
+    });
   }
 
   const selOff = selected ? getOffset(selected) : null;
@@ -1421,6 +1568,34 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     <div className="flex h-full" style={{ minHeight: 520 }}>
       {/* Sidebar */}
       <div className="w-64 shrink-0 border-r border-slate-200 bg-white flex flex-col overflow-y-auto">
+        {/* Barre d'outils vue/scan toujours visible */}
+        <div className="flex gap-1 p-2 border-b border-slate-100">
+          <button
+            onClick={() => activerMode(niveauMode ? null : "niveau")}
+            title="Caler l'horizontalité : cliquez 2 points qui devraient être à la même altitude (assise, gouttière) — le scan pivote pour les mettre de niveau"
+            className="flex-1 py-1.5 rounded-lg text-xs font-medium border transition-colors"
+            style={niveauMode
+              ? { background: "#10b981", color: "white", borderColor: "#10b981" }
+              : { borderColor: "#e2e8f0", color: "#64748b" }}>
+            ⟂ Niveau
+          </button>
+          <button
+            onClick={toggleVertLock}
+            title="Bloquer l'inclinaison verticale de la vue (l'orbite reste à l'angle de site courant)"
+            className="flex-1 py-1.5 rounded-lg text-xs font-medium border transition-colors"
+            style={vertLock
+              ? { background: "var(--navy)", color: "white", borderColor: "var(--navy)" }
+              : { borderColor: "#e2e8f0", color: "#64748b" }}>
+            {vertLock ? "🔒" : "🔓"} Vertic.
+          </button>
+          <button
+            onClick={() => cadrerVue(true)}
+            title="Recadrer la vue sur la maquette"
+            className="px-2 py-1.5 rounded-lg text-xs font-medium border transition-colors"
+            style={{ borderColor: "#e2e8f0", color: "#64748b" }}>
+            ⤢
+          </button>
+        </div>
         <div className="border-b border-slate-100">
           {sectionHeader("pieces", "🧩", "Pièces", layers.length)}
           {openCat === "pieces" && (
@@ -1452,15 +1627,6 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
               );
             })}
           </div>
-          <button
-            onClick={() => activerMode(niveauMode ? null : "niveau")}
-            title="Le scan photogrammétrique peut être légèrement penché : cliquez 2 points qui devraient être à la même altitude (assise de briques, gouttière…) — le scan pivote pour les mettre de niveau"
-            className="w-full mt-2 py-1.5 rounded-lg text-xs font-medium border transition-colors"
-            style={niveauMode
-              ? { background: "#10b981", color: "white", borderColor: "#10b981" }
-              : { borderColor: "#e2e8f0", color: "#64748b" }}>
-            {niveauMode ? (niveauDraft ? "Cliquez le 2e point…" : "Cliquez le 1er point…") : "⟂ Mettre à niveau"}
-          </button>
           </div>
           )}
         </div>
@@ -1905,7 +2071,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         )}
         {!murMode && !pipette && !mesureMode && !niveauMode && !ouvMode && !dalleMode && !toitMode && !ancreMode && murSel && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
-            ↔ Glissez le corps pour déplacer · les <span className="text-cyan-300">poignées cyan</span> pour allonger/ajuster (accrochage ancres, murs) · Échap : désélectionner
+            ↔ Glissez le corps pour déplacer · <span className="text-yellow-300">poignées jaunes</span> = longueur/ajuster (accrochage ancres/murs) · <span className="text-emerald-300">verte</span> = hauteur · Échap : désélectionner
           </div>
         )}
       </div>
