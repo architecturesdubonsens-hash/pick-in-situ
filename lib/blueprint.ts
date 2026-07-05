@@ -203,7 +203,8 @@ export function generateProjectionDXF(
   realW: number,
   realH: number,
   elements?: FacadeElement[],
-  sectionSegs?: Seg2D[]
+  sectionSegs?: Seg2D[],
+  dessinSegs?: Seg2D[]
 ): string {
   const SCALE = 20; // 1:50 → mm
 
@@ -224,12 +225,15 @@ export function generateProjectionDXF(
 
   const hasElements = elements && elements.length > 0;
   const hasPoche = sectionSegs && sectionSegs.length > 0;
-  const layerCount = 2 + (hasElements ? 2 : 0) + (hasPoche ? 1 : 0);
+  const hasDessin = dessinSegs && dessinSegs.length > 0;
+  const layerCount = 2 + (hasElements ? 2 : 0) + (hasPoche ? 1 : 0) + (hasDessin ? 1 : 0);
   const extraLayers = (hasElements
     ? `0\nLAYER\n2\nFENETRES\n70\n0\n62\n4\n6\nCONTINUOUS\n` +
       `0\nLAYER\n2\nPORTES\n70\n0\n62\n30\n6\nCONTINUOUS\n`
     : "") + (hasPoche
     ? `0\nLAYER\n2\nPOCHE\n70\n0\n62\n250\n6\nCONTINUOUS\n`
+    : "") + (hasDessin
+    ? `0\nLAYER\n2\nDESSIN\n70\n0\n62\n30\n6\nCONTINUOUS\n`
     : "");
   const layerDefs =
     `0\nLAYER\n2\nGEOMETRIE\n70\n0\n62\n8\n6\nCONTINUOUS\n` +
@@ -250,7 +254,8 @@ export function generateProjectionDXF(
   }).join("");
 
   const pocheEntities = (sectionSegs ?? []).map((s) => dxfLine(s, "POCHE")).join("");
-  const entities = segments.map((s) => dxfLine(s, "GEOMETRIE")).join("") + pocheEntities + border + title + elementEntities;
+  const dessinEntities = (dessinSegs ?? []).map((s) => dxfLine(s, "DESSIN")).join("");
+  const entities = segments.map((s) => dxfLine(s, "GEOMETRIE")).join("") + pocheEntities + dessinEntities + border + title + elementEntities;
 
   return `0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1015\n9\n$INSUNITS\n70\n4\n9\n$MEASUREMENT\n70\n1\n0\nENDSEC\n` +
     `0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n${layerCount}\n${layerDefs}0\nENDTAB\n0\nENDSEC\n` +

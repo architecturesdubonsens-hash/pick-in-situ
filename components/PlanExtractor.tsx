@@ -36,6 +36,8 @@ interface ViewMeta {
   dims: (size: THREE.Vector3) => { w: number; h: number };
   depth: (v: THREE.Vector3) => number;
   classifyDepth: boolean;
+  /** Coupe : valeur du plan de coupe dans l'unité de depth() — sert d'écorché au rendu texturé */
+  sectionDepth?: number;
 }
 
 interface SceneEntry {
@@ -418,7 +420,83 @@ function makeCoupeViewMeta(p1: { x: number; z: number }, p2: { x: number; z: num
     dims: (s) => ({ w: len, h: s.y }),
     depth: (v) => nx * v.x + nz * v.z,
     classifyDepth: true,
+    sectionDepth: nx * p1.x + nz * p1.z,
   };
+}
+
+// ── Fond ortho-texturé ────────────────────────────────────────────────────────
+// Rendu orthographique du mesh texturé, calé pixel-perfect sur le cadre SVG de la
+// vue : la base caméra (right/up/normale) est dérivée du mapping (u,v) de la vue,
+// donc l'image et les traits partagent exactement le même repère. Le plan near de
+// la caméra sert d'écorché : en plan il supprime tout ce qui dépasse la hauteur de
+// coupe, en coupe tout ce qui est devant le trait — comme un vrai document coupé.
+let underlayRenderer: THREE.WebGLRenderer | null = null;
+
+function renderOrthoUnderlay(
+  entries: SceneEntry[],
+  view: ViewMeta,
+  box: THREE.Box3,
+  sectionDepthValue?: number,
+  widthPx = 1800
+): string | null {
+  try {
+    if (!entries.length) return null;
+    const size = box.getSize(new THREE.Vector3());
+    const { w, h } = view.dims(size);
+    if (w <= 0 || h <= 0) return null;
+    const svgW = 1000, pad = 40;
+    const svgH = Math.round(svgW * h / w);
+    const scaleX = (svgW - pad * 2) / w, scaleY = (svgH - pad * 2) / h;
+    const padU = pad / scaleX, padV = pad / scaleY;
+    const corners = [box.min, box.max].map((p) => view.project(p));
+    const uMin = Math.min(...corners.map((p) => p.u));
+    const vMin = Math.min(...corners.map((p) => p.v));
+
+    // Base caméra depuis le mapping (u,v) : gradients de u et v (projections linéaires)
+    const o = new THREE.Vector3();
+    const ex = new THREE.Vector3(1, 0, 0), ey = new THREE.Vector3(0, 1, 0), ez = new THREE.Vector3(0, 0, 1);
+    const cU = view.project(o).u, cV = view.project(o).v;
+    const right = new THREE.Vector3(view.project(ex).u - cU, view.project(ey).u - cU, view.project(ez).u - cU).normalize();
+    const down  = new THREE.Vector3(view.project(ex).v - cV, view.project(ey).v - cV, view.project(ez).v - cV).normalize();
+    const upCam = down.clone().negate();
+    const zc = new THREE.Vector3().crossVectors(right, upCam).normalize();
+
+    const center = box.getCenter(new THREE.Vector3());
+    const radius = size.length() / 2 + 1;
+    const camPos = center.clone().add(zc.clone().multiplyScalar(radius));
+
+    // Frustum en coordonnées caméra : cam_x = u - cU - right·camPos ; cam_y = cV - v - upCam·camPos
+    const offU = cU + right.dot(camPos);
+    const offV = cV + upCam.dot(camPos);
+    const left   = uMin - padU - offU;
+    const rightF = uMin + w + padU - offU;
+    const top    = offV - (vMin - padV);
+    const bottom = offV - (vMin + h + padV);
+    // Écorché : depth(p) = zc·p (linéaire) → near = distance caméra→plan de coupe
+    const near = sectionDepthValue !== undefined
+      ? Math.max(0.01, zc.dot(camPos) - sectionDepthValue)
+      : 0.01;
+    const cam = new THREE.OrthographicCamera(left, rightF, top, bottom, near, radius * 3);
+    cam.position.copy(camPos);
+    cam.up.copy(upCam);
+    cam.lookAt(center);
+    cam.updateMatrixWorld(true);
+
+    if (!underlayRenderer) {
+      underlayRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    }
+    const hPx = Math.max(2, Math.round(widthPx * svgH / svgW));
+    underlayRenderer.setSize(widthPx, hPx, false);
+    underlayRenderer.setClearColor(0x000000, 0);
+    const scene = new THREE.Scene();
+    for (const e of entries) scene.add(e.scene);
+    underlayRenderer.render(scene, cam);
+    const url = underlayRenderer.domElement.toDataURL("image/png");
+    for (const e of entries) scene.remove(e.scene);
+    return url;
+  } catch {
+    return null;
+  }
 }
 
 // ── Coordonnées SVG plan ←→ monde ─────────────────────────────────────────────
@@ -458,7 +536,8 @@ function segsToSVG(
   visibleLayers: Set<string>,
   elements?: FacadeElement[],
   svgW = 1000,
-  facesData?: { faces: TaggedFace[]; opacity: number }
+  facesData?: { faces: TaggedFace[]; opacity: number },
+  underlay?: { url: string; opacity: number } | null
 ): string {
   const filteredEdge = edgeSegs.filter((s) => visibleLayers.has(s.layer));
   const filteredSection = sectionSegs.filter((s) => visibleLayers.has(s.layer));
@@ -565,8 +644,12 @@ function segsToSVG(
     <path d="M20 0L0 0 0 20" fill="none" stroke="#111e33" stroke-width="0.4"/></pattern></defs>
   <rect width="${svgW}" height="${svgH}" fill="url(#g)"/>`;
 
+  const underlaySvg = underlay
+    ? `<image href="${underlay.url}" x="0" y="0" width="${svgW}" height="${svgH}" opacity="${underlay.opacity}" preserveAspectRatio="none"/>`
+    : "";
+
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" preserveAspectRatio="none" style="background:#0a1628;width:100%;height:100%;">
-  ${grid}${faceSvg}${poche}${pocheOutline}${hiddenLines}${visibleLines}${overlay}${scaleBar}${label}
+  ${grid}${underlaySvg}${faceSvg}${poche}${pocheOutline}${hiddenLines}${visibleLines}${overlay}${scaleBar}${label}
 </svg>`;
 }
 
@@ -635,6 +718,11 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
   // Faces pleines
   const [allFaces, setAllFaces] = useState<TaggedFace[]>([]);
   const [facesOpacity, setFacesOpacity] = useState(0.85);
+
+  // Fond ortho-texturé
+  const [underlayOn, setUnderlayOn] = useState(true);
+  const [underlayOpacity, setUnderlayOpacity] = useState(0.9);
+  const [underlayUrl, setUnderlayUrl] = useState<string | null>(null);
 
   // Zoom / pan blueprint
   const [viewTransform, setViewTransform] = useState({ scale: 1, tx: 0, ty: 0 });
@@ -728,6 +816,19 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
           gltf.scene.position.set(scan.offsetX, scan.offsetZ ?? 0, scan.offsetY);
           gltf.scene.rotation.y = (scan.angle * Math.PI) / 180;
           gltf.scene.updateMatrixWorld(true);
+          // Matériaux non-éclairés pour le rendu ortho-texturé (pas de lumières
+          // dans la scène de rendu ; la texture photo porte déjà l'éclairage réel)
+          gltf.scene.traverse((obj) => {
+            const mesh = obj as THREE.Mesh;
+            if (!mesh.isMesh) return;
+            const orig = mesh.material as { map?: THREE.Texture };
+            mesh.material = new THREE.MeshBasicMaterial({
+              ...(orig && !Array.isArray(orig) && orig.map
+                ? { map: orig.map }
+                : { color: SCAN_COLORS[i % SCAN_COLORS.length] }),
+              side: THREE.DoubleSide,
+            });
+          });
           allEdge.push(...extractEdgeSegments(gltf.scene));
           combined.union(new THREE.Box3().setFromObject(gltf.scene));
           entries.push({ scene: gltf.scene, scanId: scan.id, nom: scan.nom, color: SCAN_COLORS[i % SCAN_COLORS.length] });
@@ -772,6 +873,22 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
     }, 300);
     return () => clearTimeout(timer);
   }, [cutHeight, box]);
+
+  // ── Fond ortho-texturé : re-rendu quand la vue / la coupe / l'assemblage change ──
+
+  useEffect(() => {
+    if (!underlayOn || !box || loading) { setUnderlayUrl(null); return; }
+    const meta = activeView === "coupe" ? coupeMeta : VIEWS[activeView as ViewKey];
+    if (!meta) { setUnderlayUrl(null); return; }
+    const t = setTimeout(() => {
+      const depthVal = activeView === "plan"
+        ? box.min.y + cutHeightRef.current
+        : activeView === "coupe" ? meta.sectionDepth
+        : undefined;
+      setUnderlayUrl(renderOrthoUnderlay(sceneEntriesRef.current, meta, box, depthVal));
+    }, 350);
+    return () => clearTimeout(t);
+  }, [underlayOn, box, activeView, coupeMeta, cutHeight, loading, assemblyDirty]);
 
   // ── Assemblage : mise à jour offset + scène + re-extraction différée ──────
 
@@ -893,17 +1010,21 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
   const hiddenCount = allLayers.length - visibleLayers.size;
 
   const facesPayload = allFaces.length > 0 ? { faces: allFaces, opacity: facesOpacity } : undefined;
+  const underlayPayload = underlayOn && underlayUrl ? { url: underlayUrl, opacity: underlayOpacity } : null;
 
-  const currentSVG = (!loading && !error && box && edgeSegs.length && activeViewMeta)
+  // NB : pas de condition sur edgeSegs.length — un chantier 100 % photogrammétrie
+  // n'a aucune arête (elles sont ignorées à dessein) mais a des coupes + un fond.
+  const currentSVG = (!loading && !error && box && activeViewMeta)
     ? activeView === "coupe"
-      ? segsToSVG(coupeEdgeSegs, coupeSectionSegs, activeViewMeta, box, scanType, visibleLayers, undefined, 1000, facesPayload)
+      ? segsToSVG(coupeEdgeSegs, coupeSectionSegs, activeViewMeta, box, scanType, visibleLayers, undefined, 1000, facesPayload, underlayPayload)
       : segsToSVG(
           edgeSegs,
           activeView === "plan" ? sectionSegs : [],
           activeViewMeta, box, scanType, visibleLayers,
           activeView !== "plan" ? enrichments[activeView] : undefined,
           1000,
-          facesPayload
+          facesPayload,
+          underlayPayload
         )
     : null;
 
@@ -913,7 +1034,7 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
   }, [currentSVG, chantierNom, activeView, dl]);
 
   const downloadDXF = useCallback(() => {
-    if (!box || !edgeSegs.length || !activeViewMeta) return;
+    if (!box || !activeViewMeta) return;
     const edg = activeView === "coupe" ? coupeEdgeSegs : edgeSegs;
     const sec = activeView === "coupe" ? coupeSectionSegs : activeView === "plan" ? sectionSegs : [];
     const dxf = segsToDXFStr(edg, sec, activeViewMeta, box, scanType, visibleLayers,
@@ -922,7 +1043,7 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
   }, [edgeSegs, coupeEdgeSegs, sectionSegs, coupeSectionSegs, box, activeView, activeViewMeta, scanType, visibleLayers, enrichments, chantierNom, dl]);
 
   const downloadAllDXF = useCallback(async () => {
-    if (!box || !edgeSegs.length) return;
+    if (!box) return;
     for (const key of Object.keys(VIEWS) as ViewKey[]) {
       const dxf = segsToDXFStr(edgeSegs, key === "plan" ? sectionSegs : [], VIEWS[key], box, scanType, visibleLayers, enrichments[key]);
       dl(new Blob([dxf], { type: "application/dxf" }), `${chantierNom}_${key}.dxf`);
@@ -1122,6 +1243,22 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
               onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v) && v >= 0.2 && v <= 2.5) setCutHeight(v); }}
               className="w-14 border border-slate-200 rounded px-1.5 py-0.5 text-xs font-mono text-slate-700 bg-white text-right focus:outline-none focus:border-cyan-400"/>
             <span className="text-xs text-slate-400">m</span>
+          </div>
+        )}
+
+        {/* Fond ortho-texturé */}
+        {!loading && !error && box && (
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg border border-slate-200 bg-slate-50" title="Fond texturé (rendu orthographique du scan)">
+            <button onClick={() => setUnderlayOn((v) => !v)}
+              className="text-xs font-medium"
+              style={{ color: underlayOn ? "var(--orange)" : "#94a3b8" }}>
+              🖼 Texture
+            </button>
+            {underlayOn && (
+              <input type="range" min={0.1} max={1} step={0.05} value={underlayOpacity}
+                onChange={(e) => setUnderlayOpacity(parseFloat(e.target.value))}
+                className="w-16 accent-orange-500"/>
+            )}
           </div>
         )}
 
