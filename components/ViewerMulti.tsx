@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
@@ -264,6 +264,61 @@ function toitGeometry(t: Toit) {
   return g;
 }
 
+// Fenêtre flottante déplaçable (palette de propriétés) — apparaît à la sélection
+function FloatingPanel({ pos, setPos, title, accent, onClose, children }: {
+  pos: { x: number; y: number };
+  setPos: (p: { x: number; y: number }) => void;
+  title: string;
+  accent: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const off = useRef({ dx: 0, dy: 0 });
+  const dragging = useRef(false);
+  useEffect(() => {
+    const move = (e: PointerEvent) => {
+      if (!dragging.current) return;
+      const x = Math.max(4, Math.min(window.innerWidth - 60, e.clientX - off.current.dx));
+      const y = Math.max(4, Math.min(window.innerHeight - 40, e.clientY - off.current.dy));
+      setPos({ x, y });
+    };
+    const up = () => { dragging.current = false; };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    return () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+  }, [setPos]);
+  return (
+    <div className="fixed z-30 w-60 bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden"
+      style={{ left: pos.x, top: pos.y }}>
+      <div
+        className="flex items-center gap-2 px-3 py-2 cursor-move select-none text-white"
+        style={{ background: accent }}
+        onPointerDown={(e) => { dragging.current = true; off.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y }; }}
+      >
+        <span className="text-xs font-semibold flex-1 truncate">{title}</span>
+        <button onClick={onClose} className="text-white/80 hover:text-white text-sm leading-none">✕</button>
+      </div>
+      <div className="p-3 flex flex-col gap-2">{children}</div>
+    </div>
+  );
+}
+
+// Champ numérique compact (défini au niveau module → garde le focus à la frappe)
+function NumField({ label, value, onChange, min, max, step = 0.01, unit = "m" }: {
+  label: string; value: number; onChange: (v: number) => void;
+  min?: number; max?: number; step?: number; unit?: string;
+}) {
+  return (
+    <label className="flex items-center gap-1.5 text-[11px] text-slate-500">
+      <span className="w-14 shrink-0">{label}</span>
+      <input type="number" value={value} min={min} max={max} step={step}
+        onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) onChange(v); }}
+        className="flex-1 min-w-0 border border-slate-200 rounded px-1.5 py-1 text-[11px] font-mono" />
+      <span className="text-slate-400 w-3">{unit}</span>
+    </label>
+  );
+}
+
 export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -337,8 +392,15 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   const [openCat, setOpenCat] = useState<string | null>("murs");
   const [dalleSel, setDalleSel] = useState<string | null>(null);
   const [toitSel, setToitSel] = useState<string | null>(null);
+  const [panelPos, setPanelPos] = useState({ x: 300, y: 96 });
   // sélectionner un mur (clic 3D ou liste) ouvre la section Murs
   useEffect(() => { if (murSel) setOpenCat("murs"); }, [murSel]);
+
+  // Sélection mutuellement exclusive (un seul élément → une seule fenêtre flottante)
+  const selMur = (id: string | null) => { setMurSel(id); setDalleSel(null); setToitSel(null); };
+  const selDalle = (id: string | null) => { setDalleSel(id); setMurSel(null); setToitSel(null); };
+  const selToit = (id: string | null) => { setToitSel(id); setMurSel(null); setDalleSel(null); };
+  const deselectAll = () => { setMurSel(null); setDalleSel(null); setToitSel(null); };
 
   // ── Mesures (10 dernières) + mise à niveau ──
   const [mesures, setMesures] = useState<Mesure[]>([]);
@@ -603,6 +665,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     await db.from("bim_murs").delete().eq("id", id); // cascade sur bim_ouvertures
     setMurs((prev) => prev.filter((m) => m.id !== id));
     setOuvertures((prev) => prev.filter((o) => o.mur_id !== id));
+    setMurSel((s) => (s === id ? null : s));
   }
 
   // ── Ouvertures : CRUD ──
@@ -618,6 +681,12 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     db.from("bim_ouvertures").update(patch).eq("id", id).then(({ error }) => {
       if (error) console.warn("[bim_ouvertures] update:", error.message);
     });
+  }
+
+  // Change la largeur en gardant fixe le nu droit (ancrage angle inférieur droit)
+  function majOuvertureLargeur(o: Ouverture, largeur: number) {
+    const droit = o.pos + o.largeur / 2;      // nu droit conservé
+    majOuverture(o.id, { largeur, pos: droit - largeur / 2 });
   }
 
   async function supprimerOuverture(id: string) {
@@ -644,6 +713,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   async function supprimerDalle(id: string) {
     await db.from("bim_dalles").delete().eq("id", id);
     setDalles((prev) => prev.filter((d) => d.id !== id));
+    setDalleSel((s) => (s === id ? null : s));
   }
 
   function majDalleLigne(draft: THREE.Vector3[]) {
@@ -720,6 +790,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   async function supprimerToit(id: string) {
     await db.from("bim_toits").delete().eq("id", id);
     setToits((prev) => prev.filter((t) => t.id !== id));
+    setToitSel((s) => (s === id ? null : s));
   }
 
   function annulerToitDraft() {
@@ -1306,11 +1377,14 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         if (!m) return;
         const len = Math.hypot(m.bx - m.ax, m.bz - m.az);
         const LARG = 1.0, HAUT = 1.15;
-        let pos = ((hit.point.x - m.ax) * (m.bx - m.ax) + (hit.point.z - m.az) * (m.bz - m.az)) / len;
-        pos = Math.round(Math.min(Math.max(pos, LARG / 2 + 0.05), len - LARG / 2 - 0.05) * 100) / 100;
-        let allege = hit.point.y - m.base_y - HAUT / 2;
-        allege = Math.round(Math.min(Math.max(allege, 0), Math.max(0, m.hauteur - HAUT - 0.05)) * 100) / 100;
+        // Ancrage sur l'angle INFÉRIEUR DROIT : le clic = nu droit + bas de la baie
+        const along = ((hit.point.x - m.ax) * (m.bx - m.ax) + (hit.point.z - m.az) * (m.bz - m.az)) / len;
+        let pos = along - LARG / 2;
+        pos = Math.round(Math.min(Math.max(pos, LARG / 2 + 0.02), len - LARG / 2 - 0.02) * 100) / 100;
+        let allege = hit.point.y - m.base_y;
+        allege = Math.round(Math.min(Math.max(allege, 0), Math.max(0, m.hauteur - HAUT - 0.02)) * 100) / 100;
         creerOuverture(murId, pos, allege);
+        setMurSel(murId);   // affiche la fenêtre de propriétés du mur percé
         return; // le mode reste actif pour enchaîner
       }
       // Dalle : clics des sommets au sol, fermeture par re-clic du 1er point ou Entrée
@@ -1362,6 +1436,8 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       // Sélection d'un mur au clic (pour l'éditer / le déplacer)
       const wallHit = ray.intersectObjects([...murMeshMapRef.current.values()])[0];
       setMurSel(wallHit ? ((wallHit.object.userData.murId as string) ?? null) : null);
+      setDalleSel(null);
+      setToitSel(null);
     };
     renderer.domElement.addEventListener("pointerdown", onDown);
     renderer.domElement.addEventListener("pointermove", onMove);
@@ -1788,69 +1864,17 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                 const len = Math.hypot(m.bx - m.ax, m.bz - m.az);
                 const sel = murSel === m.id;
                 return (
-                  <div key={m.id} onClick={() => setMurSel(sel ? null : m.id)}
-                    className="group border rounded-lg px-2 py-1.5 cursor-pointer transition-colors"
+                  <div key={m.id} onClick={() => selMur(sel ? null : m.id)}
+                    className="group flex items-center gap-2 border rounded-lg px-2 py-1.5 text-xs text-slate-600 cursor-pointer transition-colors"
                     style={sel ? { borderColor: "#2563eb", background: "#eff6ff" } : { borderColor: "#f1f5f9" }}>
-                    <div className="flex items-center gap-2 text-xs text-slate-600">
-                      <span className="font-medium">Mur {i + 1}</span>
-                      <span className="font-mono text-slate-400">{len.toFixed(2)} m</span>
-                      {m.decalage !== 0 && (
-                        <button onClick={(e) => { e.stopPropagation(); majMur(m.id, { decalage: -m.decalage }); }}
-                          title="Basculer le corps du mur de l'autre côté du nu tracé"
-                          className="text-[11px] opacity-50 hover:opacity-100">⇄</button>
-                      )}
-                      <button onClick={(e) => { e.stopPropagation(); supprimerMur(m.id); }}
-                        className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
-                        title="Supprimer">🗑</button>
-                    </div>
-                    {sel && (<>
-                    <div className="flex items-center gap-1 mt-1">
-                      <span className="text-[10px] text-slate-400">ép.</span>
-                      <input type="number" min={0.05} max={1} step={0.01} value={m.epaisseur}
-                        onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majMur(m.id, { epaisseur: v }); }}
-                        className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
-                      <span className="text-[10px] text-slate-400 ml-1">h.</span>
-                      <input type="number" min={0.3} max={12} step={0.05} value={m.hauteur}
-                        onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majMur(m.id, { hauteur: v }); }}
-                        className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
-                      <span className="text-[10px] text-slate-400">m</span>
-                    </div>
-                    <div className="flex items-center gap-1 mt-1">
-                      <span className="text-[10px] text-slate-400">base</span>
-                      <input type="number" step={0.01} value={m.base_y}
-                        onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majMur(m.id, { base_y: v }); }}
-                        className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
-                      <span className="text-[10px] text-slate-400">m</span>
-                    </div>
-                    {ouvertures.filter((o) => o.mur_id === m.id).map((o, j) => (
-                      <div key={o.id} className="group/ouv ml-1 mt-1 border-l-2 border-orange-200 pl-1.5">
-                        <div className="flex items-center gap-1 text-[10px] text-slate-500">
-                          <span>🚪 {j + 1}</span>
-                          <span className="text-slate-400">l.</span>
-                          <input type="number" min={0.2} max={6} step={0.05} value={o.largeur}
-                            onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majOuverture(o.id, { largeur: v }); }}
-                            className="w-11 border border-slate-200 rounded px-1 py-0.5 text-[10px] font-mono"/>
-                          <span className="text-slate-400">h.</span>
-                          <input type="number" min={0.2} max={6} step={0.05} value={o.hauteur}
-                            onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majOuverture(o.id, { hauteur: v }); }}
-                            className="w-11 border border-slate-200 rounded px-1 py-0.5 text-[10px] font-mono"/>
-                          <button onClick={(e) => { e.stopPropagation(); supprimerOuverture(o.id); }}
-                            className="ml-auto opacity-0 group-hover/ouv:opacity-70 hover:!opacity-100 text-[10px]"
-                            title="Supprimer l'ouverture">🗑</button>
-                        </div>
-                        <div className="flex items-center gap-1 mt-0.5 text-[10px] text-slate-400">
-                          <span>allège</span>
-                          <input type="number" min={0} step={0.05} value={o.allege}
-                            onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majOuverture(o.id, { allege: v }); }}
-                            className="w-11 border border-slate-200 rounded px-1 py-0.5 text-[10px] font-mono"/>
-                          <span>pos.</span>
-                          <input type="number" min={0} step={0.05} value={o.pos}
-                            onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majOuverture(o.id, { pos: v }); }}
-                            className="w-11 border border-slate-200 rounded px-1 py-0.5 text-[10px] font-mono"/>
-                        </div>
-                      </div>
-                    ))}
-                    </>)}
+                    <span className="font-medium">Mur {i + 1}</span>
+                    <span className="font-mono text-slate-400">{len.toFixed(2)} m</span>
+                    {ouvertures.some((o) => o.mur_id === m.id) && (
+                      <span className="text-[10px] text-orange-400">🚪 {ouvertures.filter((o) => o.mur_id === m.id).length}</span>
+                    )}
+                    <button onClick={(e) => { e.stopPropagation(); supprimerMur(m.id); }}
+                      className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
+                      title="Supprimer">🗑</button>
                   </div>
                 );
               })}
@@ -1879,29 +1903,14 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
               {dalles.map((d, i) => {
                 const sel = dalleSel === d.id;
                 return (
-                <div key={d.id} onClick={() => setDalleSel(sel ? null : d.id)}
-                  className="group border rounded-lg px-2 py-1.5 cursor-pointer transition-colors"
+                <div key={d.id} onClick={() => selDalle(sel ? null : d.id)}
+                  className="group flex items-center gap-2 border rounded-lg px-2 py-1.5 text-xs text-slate-600 cursor-pointer transition-colors"
                   style={sel ? { borderColor: "#2563eb", background: "#eff6ff" } : { borderColor: "#f1f5f9" }}>
-                  <div className="flex items-center gap-2 text-xs text-slate-600">
-                    <span className="font-medium">Dalle {i + 1}</span>
-                    <span className="font-mono text-slate-400">{aireDalle(d.points).toFixed(1)} m²</span>
-                    <button onClick={(e) => { e.stopPropagation(); supprimerDalle(d.id); }}
-                      className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
-                      title="Supprimer">🗑</button>
-                  </div>
-                  {sel && (
-                  <div className="flex items-center gap-1 mt-1">
-                    <span className="text-[10px] text-slate-400">ép.</span>
-                    <input type="number" min={0.05} max={1} step={0.01} value={d.epaisseur}
-                      onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majDalle(d.id, { epaisseur: v }); }}
-                      className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
-                    <span className="text-[10px] text-slate-400 ml-1">niv.</span>
-                    <input type="number" step={0.01} value={d.base_y}
-                      onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majDalle(d.id, { base_y: v }); }}
-                      className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
-                    <span className="text-[10px] text-slate-400">m</span>
-                  </div>
-                  )}
+                  <span className="font-medium">Dalle {i + 1}</span>
+                  <span className="font-mono text-slate-400">{aireDalle(d.points).toFixed(1)} m²</span>
+                  <button onClick={(e) => { e.stopPropagation(); supprimerDalle(d.id); }}
+                    className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
+                    title="Supprimer">🗑</button>
                 </div>
                 );
               })}
@@ -1937,25 +1946,14 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                   : 0;
                 const sel = toitSel === t.id;
                 return (
-                  <div key={t.id} onClick={() => setToitSel(sel ? null : t.id)}
-                    className="group border rounded-lg px-2 py-1.5 cursor-pointer transition-colors"
+                  <div key={t.id} onClick={() => selToit(sel ? null : t.id)}
+                    className="group flex items-center gap-2 border rounded-lg px-2 py-1.5 text-xs text-slate-600 cursor-pointer transition-colors"
                     style={sel ? { borderColor: "#2563eb", background: "#eff6ff" } : { borderColor: "#f1f5f9" }}>
-                    <div className="flex items-center gap-2 text-xs text-slate-600">
-                      <span className="font-medium">Pan {i + 1}</span>
-                      <span className="font-mono text-slate-400">{aire.toFixed(1)} m² · {pente}°</span>
-                      <button onClick={(e) => { e.stopPropagation(); supprimerToit(t.id); }}
-                        className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
-                        title="Supprimer">🗑</button>
-                    </div>
-                    {sel && (
-                    <div className="flex items-center gap-1 mt-1">
-                      <span className="text-[10px] text-slate-400">ép.</span>
-                      <input type="number" min={0.05} max={1} step={0.01} value={t.epaisseur}
-                        onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majToit(t.id, { epaisseur: v }); }}
-                        className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
-                      <span className="text-[10px] text-slate-400">m</span>
-                    </div>
-                    )}
+                    <span className="font-medium">Pan {i + 1}</span>
+                    <span className="font-mono text-slate-400">{aire.toFixed(1)} m² · {pente}°</span>
+                    <button onClick={(e) => { e.stopPropagation(); supprimerToit(t.id); }}
+                      className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
+                      title="Supprimer">🗑</button>
                   </div>
                 );
               })}
@@ -2125,6 +2123,90 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
             ↔ Glissez le corps pour déplacer · <span className="text-yellow-300">poignées jaunes</span> = longueur/ajuster (accrochage ancres/murs) · <span className="text-emerald-300">verte</span> = hauteur · Échap : désélectionner
           </div>
         )}
+
+        {/* Fenêtre flottante de propriétés de l'élément sélectionné */}
+        {(() => {
+          const mSel = murSel ? murs.find((m) => m.id === murSel) : null;
+          const dSel = dalleSel ? dalles.find((d) => d.id === dalleSel) : null;
+          const tSel = toitSel ? toits.find((t) => t.id === toitSel) : null;
+          if (!mSel && !dSel && !tSel) return null;
+          const num = (arr: { id: string }[], id: string) => arr.findIndex((x) => x.id === id) + 1;
+          const baies = mSel ? ouvertures.filter((o) => o.mur_id === mSel.id) : [];
+          const title = mSel ? `🧱 Mur ${num(murs, mSel.id)}`
+            : dSel ? `⬜ Dalle ${num(dalles, dSel.id)}` : `🏠 Pan ${num(toits, tSel!.id)}`;
+          const accent = mSel ? "#2563eb" : dSel ? "#64748b" : "#b91c1c";
+          return (
+            <FloatingPanel pos={panelPos} setPos={setPanelPos} title={title} accent={accent} onClose={deselectAll}>
+              {mSel && (<>
+                <NumField label="Épaisseur" value={mSel.epaisseur} min={0.05} max={1}
+                  onChange={(v) => majMur(mSel.id, { epaisseur: v })} />
+                <NumField label="Hauteur" value={mSel.hauteur} min={0.3} max={12} step={0.05}
+                  onChange={(v) => majMur(mSel.id, { hauteur: v })} />
+                <NumField label="Base (niv.)" value={mSel.base_y} step={0.01}
+                  onChange={(v) => majMur(mSel.id, { base_y: v })} />
+                {mSel.decalage !== 0 && (
+                  <button onClick={() => majMur(mSel.id, { decalage: -mSel.decalage })}
+                    className="text-[11px] text-slate-500 hover:text-slate-800 underline self-start">
+                    ⇄ Basculer le corps de l&apos;autre côté du nu
+                  </button>
+                )}
+                <div className="border-t border-slate-100 pt-2 mt-1">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[11px] font-semibold text-slate-500">Ouvertures — {baies.length}</span>
+                    <button onClick={() => activerMode(ouvMode ? null : "ouverture")}
+                      className="text-[11px] px-2 py-0.5 rounded border transition-colors"
+                      style={ouvMode
+                        ? { background: "#f97316", color: "white", borderColor: "#f97316" }
+                        : { borderColor: "#e2e8f0", color: "#64748b" }}>
+                      {ouvMode ? "cliquez le mur…" : "🚪 ＋"}
+                    </button>
+                  </div>
+                  <div className="flex flex-col gap-2 max-h-52 overflow-y-auto">
+                    {baies.map((o, j) => (
+                      <div key={o.id} className="border border-orange-100 rounded-lg p-2 flex flex-col gap-1">
+                        <div className="flex items-center gap-2 text-[11px] text-slate-500">
+                          <span className="font-medium">🚪 {j + 1}</span>
+                          <button onClick={() => supprimerOuverture(o.id)}
+                            className="ml-auto text-slate-300 hover:text-red-500" title="Supprimer">🗑</button>
+                        </div>
+                        <NumField label="Largeur" value={o.largeur} min={0.2} max={6} step={0.05}
+                          onChange={(v) => majOuvertureLargeur(o, v)} />
+                        <NumField label="Hauteur" value={o.hauteur} min={0.2} max={6} step={0.05}
+                          onChange={(v) => majOuverture(o.id, { hauteur: v })} />
+                        <NumField label="Allège" value={o.allege} min={0} step={0.05}
+                          onChange={(v) => majOuverture(o.id, { allege: v })} />
+                        <NumField label="Position" value={o.pos} min={0} step={0.05}
+                          onChange={(v) => majOuverture(o.id, { pos: v })} />
+                      </div>
+                    ))}
+                    {baies.length === 0 && (
+                      <p className="text-[10px] text-slate-400">« 🚪 ＋ » puis cliquez le mur à l&apos;angle inférieur droit de la baie.</p>
+                    )}
+                  </div>
+                </div>
+                <button onClick={() => supprimerMur(mSel.id)}
+                  className="text-[11px] text-red-500 hover:text-red-700 self-start mt-1">🗑 Supprimer le mur</button>
+              </>)}
+
+              {dSel && (<>
+                <NumField label="Épaisseur" value={dSel.epaisseur} min={0.05} max={1}
+                  onChange={(v) => majDalle(dSel.id, { epaisseur: v })} />
+                <NumField label="Niveau" value={dSel.base_y} step={0.01}
+                  onChange={(v) => majDalle(dSel.id, { base_y: v })} />
+                <p className="text-[10px] text-slate-400">{aireDalle(dSel.points).toFixed(1)} m² · {dSel.points.length} sommets</p>
+                <button onClick={() => supprimerDalle(dSel.id)}
+                  className="text-[11px] text-red-500 hover:text-red-700 self-start mt-1">🗑 Supprimer la dalle</button>
+              </>)}
+
+              {tSel && (<>
+                <NumField label="Épaisseur" value={tSel.epaisseur} min={0.05} max={1}
+                  onChange={(v) => majToit(tSel.id, { epaisseur: v })} />
+                <button onClick={() => supprimerToit(tSel.id)}
+                  className="text-[11px] text-red-500 hover:text-red-700 self-start mt-1">🗑 Supprimer le pan</button>
+              </>)}
+            </FloatingPanel>
+          );
+        })()}
       </div>
     </div>
   );
