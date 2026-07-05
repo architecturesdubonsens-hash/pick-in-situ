@@ -95,6 +95,11 @@ interface Toit {
   epaisseur: number;
 }
 
+interface Ancre {
+  id: string;
+  x: number; y: number; z: number;
+}
+
 function murMaterial() {
   return new THREE.MeshStandardMaterial({
     color: 0xf97316, transparent: true, opacity: 0.55, roughness: 0.6,
@@ -109,17 +114,76 @@ function bimMaterial(color: number) {
   });
 }
 
+// Profil du haut du mur (hauteur locale échantillonnée le long de l'axe) quand une
+// ou plusieurs toitures le recoupent → pignons/rampants automatiques. Renvoie null
+// si aucune toiture ne le coupe (mur à sommet plat = chemin rapide).
+function murTopProfile(
+  m: Mur, len: number, dirx: number, dirz: number,
+  nx: number, nz: number, off: number, roofs: Toit[]
+): { x: number; y: number }[] | null {
+  if (!roofs.length) return null;
+  const Ax = m.ax + nx * off, Az = m.az + nz * off;
+  const infos = roofs.map((t) => {
+    const { p1, e, s } = toitVecteurs(t);
+    let n = new THREE.Vector3().crossVectors(e, s).normalize();
+    if (n.y < 0) n.negate();
+    return { p1x: p1.x, p1y: p1.y, p1z: p1.z, ex: e.x, ez: e.z, sx: s.x, sz: s.z,
+             nx: n.x, ny: n.y, nz: n.z, det: e.x * s.z - e.z * s.x };
+  });
+  const N = Math.min(160, Math.max(8, Math.ceil(len / 0.12)));
+  const prof: { x: number; y: number }[] = [];
+  let cut = false;
+  for (let i = 0; i <= N; i++) {
+    const X = (len * i) / N;
+    const wx = Ax + dirx * X, wz = Az + dirz * X;
+    let top = m.hauteur;
+    for (const inf of infos) {
+      if (Math.abs(inf.det) < 1e-6 || Math.abs(inf.ny) < 1e-4) continue;
+      const rx = wx - inf.p1x, rz = wz - inf.p1z;
+      const a = (rx * inf.sz - rz * inf.sx) / inf.det;
+      const b = (inf.ex * rz - inf.ez * rx) / inf.det;
+      if (a < -0.15 || a > 1.15 || b < -0.15 || b > 1.15) continue;
+      const roofY = inf.p1y - (inf.nx * rx + inf.nz * rz) / inf.ny;
+      const localTop = roofY - m.base_y;
+      if (localTop < top) top = localTop;
+    }
+    top = Math.max(0.1, top);
+    if (top < m.hauteur - 1e-3) cut = true;
+    prof.push({ x: X, y: top });
+  }
+  return cut ? prof : null;
+}
+
+function topAtX(prof: { x: number; y: number }[] | null, hauteur: number, x: number) {
+  if (!prof || !prof.length) return hauteur;
+  for (let i = 1; i < prof.length; i++) {
+    if (x <= prof[i].x) {
+      const t = (x - prof[i - 1].x) / Math.max(1e-6, prof[i].x - prof[i - 1].x);
+      return prof[i - 1].y + t * (prof[i].y - prof[i - 1].y);
+    }
+  }
+  return prof[prof.length - 1].y;
+}
+
 // Élévation du mur (longueur × hauteur) avec les ouvertures en trous, extrudée
 // sur l'épaisseur — géométrie locale : X = axe, Y = hauteur (0 à h), Z = épaisseur
-function murGeometry(m: Mur, len: number, ouvertures: Ouverture[]) {
+function murGeometry(m: Mur, len: number, ouvertures: Ouverture[], prof: { x: number; y: number }[] | null) {
   const shape = new THREE.Shape();
-  shape.moveTo(0, 0); shape.lineTo(len, 0); shape.lineTo(len, m.hauteur);
-  shape.lineTo(0, m.hauteur); shape.closePath();
+  shape.moveTo(0, 0); shape.lineTo(len, 0);
+  if (prof && prof.length) {
+    for (let i = prof.length - 1; i >= 0; i--) shape.lineTo(prof[i].x, prof[i].y);
+  } else {
+    shape.lineTo(len, m.hauteur); shape.lineTo(0, m.hauteur);
+  }
+  shape.closePath();
   for (const o of ouvertures) {
     const x0 = Math.max(0.01, o.pos - o.largeur / 2);
     const x1 = Math.min(len - 0.01, o.pos + o.largeur / 2);
     const y0 = Math.max(0, o.allege);
-    const y1 = Math.min(m.hauteur - 0.01, o.allege + o.hauteur);
+    // plafonne le haut de l'ouverture sous le rampant à cet endroit
+    const topLim = Math.min(topAtX(prof, m.hauteur, o.pos - o.largeur / 2),
+                            topAtX(prof, m.hauteur, o.pos + o.largeur / 2)) - 0.02;
+    const y1 = Math.min(topLim, o.allege + o.hauteur);
     if (x1 - x0 < 0.02 || y1 - y0 < 0.02) continue;
     const trou = new THREE.Path();
     trou.moveTo(x0, y0); trou.lineTo(x1, y0); trou.lineTo(x1, y1);
@@ -131,14 +195,16 @@ function murGeometry(m: Mur, len: number, ouvertures: Ouverture[]) {
   return g;
 }
 
-function poserMurMesh(mesh: THREE.Mesh, m: Mur, ouvertures: Ouverture[]) {
+function poserMurMesh(mesh: THREE.Mesh, m: Mur, ouvertures: Ouverture[], roofs: Toit[]) {
   const dx = m.bx - m.ax, dz = m.bz - m.az;
   const len = Math.max(0.05, Math.hypot(dx, dz));
   // Décalage perpendiculaire : la ligne tracée est l'axe (0) ou un nu (±0.5 × ép.)
   const off = (m.decalage ?? 0) * m.epaisseur;
   const nx = -dz / len, nz = dx / len;
+  const dirx = dx / len, dirz = dz / len;
+  const prof = murTopProfile(m, len, dirx, dirz, nx, nz, off, roofs);
   mesh.geometry.dispose();
-  mesh.geometry = murGeometry(m, len, ouvertures);
+  mesh.geometry = murGeometry(m, len, ouvertures, prof);
   mesh.position.set((m.ax + m.bx) / 2 + nx * off, m.base_y, (m.az + m.bz) / 2 + nz * off);
   mesh.rotation.y = -Math.atan2(dz, dx);
 }
@@ -244,11 +310,25 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   const toitMarkersRef = useRef<THREE.Mesh[]>([]);
   const dalleMeshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const toitMeshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
+  const ouverturesRef = useRef<Ouverture[]>([]);
+  const toitsRef = useRef<Toit[]>([]);
   useEffect(() => { ouvModeRef.current = ouvMode; }, [ouvMode]);
   useEffect(() => { dalleModeRef.current = dalleMode; }, [dalleMode]);
   useEffect(() => { dalleDraftRef.current = dalleDraft; }, [dalleDraft]);
   useEffect(() => { toitModeRef.current = toitMode; }, [toitMode]);
   useEffect(() => { toitDraftRef.current = toitDraft; }, [toitDraft]);
+  useEffect(() => { ouverturesRef.current = ouvertures; }, [ouvertures]);
+  useEffect(() => { toitsRef.current = toits; }, [toits]);
+
+  // ── Ancres (points d'accroche posés sur le scan) + poignées d'extrémité ──
+  const [ancres, setAncres] = useState<Ancre[]>([]);
+  const [ancreMode, setAncreMode] = useState(false);
+  const ancreModeRef = useRef(false);
+  const ancresRef = useRef<Ancre[]>([]);
+  const ancreMeshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
+  const handleMeshesRef = useRef<THREE.Mesh[]>([]);
+  useEffect(() => { ancreModeRef.current = ancreMode; }, [ancreMode]);
+  useEffect(() => { ancresRef.current = ancres; }, [ancres]);
 
   // ── Mesures (10 dernières) + mise à niveau ──
   const [mesures, setMesures] = useState<Mesure[]>([]);
@@ -354,6 +434,8 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       .then(({ data }) => { if (data) setDalles(data as Dalle[]); });
     db.from("bim_toits").select("*").eq("chantier_id", chantierId)
       .then(({ data }) => { if (data) setToits(data as Toit[]); });
+    db.from("bim_ancres").select("*").eq("chantier_id", chantierId)
+      .then(({ data }) => { if (data) setAncres(data as Ancre[]); });
   }, [chantierId]);
 
   // Synchronise les meshes de murs avec l'état
@@ -372,13 +454,13 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         murMeshMapRef.current.set(m.id, mesh);
         scene.add(mesh);
       }
-      poserMurMesh(mesh, m, ouvertures.filter((o) => o.mur_id === m.id));
+      poserMurMesh(mesh, m, ouvertures.filter((o) => o.mur_id === m.id), toits);
       const mat = mesh.material as THREE.MeshStandardMaterial;
       const sel = m.id === murSel;
       mat.color.setHex(sel ? 0x2563eb : 0xf97316);
       mat.opacity = sel ? 0.75 : 0.55;
     }
-  }, [murs, murSel, ouvertures]);
+  }, [murs, murSel, ouvertures, toits]);
 
   // Synchronise les meshes de dalles et de toits
   useEffect(() => {
@@ -419,6 +501,51 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       mesh.geometry = toitGeometry(t); // géométrie en coordonnées monde
     }
   }, [toits]);
+
+  // Marqueurs d'ancres (octaèdres magenta, toujours visibles)
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const vivantes = new Set(ancres.map((a) => a.id));
+    for (const [id, mesh] of ancreMeshMapRef.current) {
+      if (!vivantes.has(id)) { scene.remove(mesh); mesh.geometry.dispose(); ancreMeshMapRef.current.delete(id); }
+    }
+    for (const a of ancres) {
+      let mesh = ancreMeshMapRef.current.get(a.id);
+      if (!mesh) {
+        mesh = new THREE.Mesh(
+          new THREE.OctahedronGeometry(0.07),
+          new THREE.MeshBasicMaterial({ color: 0xd946ef, depthTest: false })
+        );
+        mesh.renderOrder = 4;
+        ancreMeshMapRef.current.set(a.id, mesh);
+        scene.add(mesh);
+      }
+      mesh.position.set(a.x, a.y, a.z);
+    }
+  }, [ancres]);
+
+  // Poignées d'extrémité du mur sélectionné (sphères cyan draggables)
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    for (const h of handleMeshesRef.current) { scene.remove(h); h.geometry.dispose(); }
+    handleMeshesRef.current = [];
+    const m = murs.find((x) => x.id === murSel);
+    if (!m) return;
+    const hy = m.base_y + Math.min(m.hauteur, 1.2);
+    for (const end of ["a", "b"] as const) {
+      const h = new THREE.Mesh(
+        new THREE.SphereGeometry(0.12, 16, 16),
+        new THREE.MeshBasicMaterial({ color: 0x06b6d4, depthTest: false })
+      );
+      h.renderOrder = 5;
+      h.userData = { handleEnd: end, murId: m.id };
+      h.position.set(end === "a" ? m.ax : m.bx, hy, end === "a" ? m.az : m.bz);
+      scene.add(h);
+      handleMeshesRef.current.push(h);
+    }
+  }, [murSel, murs]);
 
   async function creerMur(a: THREE.Vector3, b: THREE.Vector3, decalage: number) {
     if (!chantierId) return;
@@ -582,9 +709,82 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     if (marker) toitMarkersRef.current.push(marker);
   }
 
+  // ── Ancres : CRUD ──
+  async function creerAncre(p: THREE.Vector3) {
+    if (!chantierId) return;
+    const row = { chantier_id: chantierId, x: p.x, y: p.y, z: p.z };
+    const { data, error } = await db.from("bim_ancres").insert(row).select("*").single();
+    if (error) { alert(`Ancre non enregistrée : ${error.message}`); return; }
+    setAncres((prev) => [...prev, data as Ancre]);
+  }
+
+  async function supprimerAncre(id: string) {
+    await db.from("bim_ancres").delete().eq("id", id);
+    setAncres((prev) => prev.filter((a) => a.id !== id));
+  }
+
+  // Accrochage planimétrique (x,z) d'un point d'extrémité de mur en cours d'édition :
+  // ancres → extrémités d'autres murs → projection sur segment d'un autre mur (jonction T)
+  function snapXZ(x: number, z: number, excludeId: string): { x: number; z: number; snap: boolean } {
+    let bx = x, bz = z, snap = false;
+    let bd = 0.3;
+    for (const a of ancresRef.current) {
+      const d = Math.hypot(x - a.x, z - a.z);
+      if (d < bd) { bd = d; bx = a.x; bz = a.z; snap = true; }
+    }
+    for (const m of mursRef.current) {
+      if (m.id === excludeId) continue;
+      for (const [ex, ez] of [[m.ax, m.az], [m.bx, m.bz]] as const) {
+        const d = Math.hypot(x - ex, z - ez);
+        if (d < bd) { bd = d; bx = ex; bz = ez; snap = true; }
+      }
+    }
+    if (snap) return { x: bx, z: bz, snap };
+    // aucune extrémité proche : projeter sur le segment d'un autre mur (jonction en T)
+    let bt = 0.2;
+    for (const m of mursRef.current) {
+      if (m.id === excludeId) continue;
+      const dx = m.bx - m.ax, dz = m.bz - m.az;
+      const l2 = dx * dx + dz * dz;
+      if (l2 < 1e-6) continue;
+      let t = ((x - m.ax) * dx + (z - m.az) * dz) / l2;
+      t = Math.min(1, Math.max(0, t));
+      const px = m.ax + t * dx, pz = m.az + t * dz;
+      const d = Math.hypot(x - px, z - pz);
+      if (d < bt) { bt = d; bx = px; bz = pz; snap = true; }
+    }
+    return { x: bx, z: bz, snap };
+  }
+
+  // Accrochage au sommet du triangle touché uniquement (sans les murs) — utilisé
+  // pendant le drag d'une poignée pour ne pas coller à l'extrémité d'origine
+  function meshVertexSnap(hit: THREE.Intersection): THREE.Vector3 {
+    let p = hit.point.clone();
+    for (const a of ancresRef.current) {
+      if (new THREE.Vector3(a.x, a.y, a.z).distanceTo(hit.point) < 0.3)
+        return new THREE.Vector3(a.x, a.y, a.z);
+    }
+    const mesh = hit.object as THREE.Mesh;
+    if (mesh.isMesh && hit.face) {
+      const pos = (mesh.geometry as THREE.BufferGeometry).attributes.position;
+      let bd = 0.15;
+      for (const idx of [hit.face.a, hit.face.b, hit.face.c]) {
+        const v = new THREE.Vector3().fromBufferAttribute(pos, idx).applyMatrix4(mesh.matrixWorld);
+        const d = v.distanceTo(hit.point);
+        if (d < bd) { bd = d; p = v; }
+      }
+    }
+    return p;
+  }
+
   // Accrochage : sommet du triangle touché (niv. 2) puis extrémités de murs (niv. 4)
   function snapPick(hit: THREE.Intersection): THREE.Vector3 {
     let p = hit.point.clone();
+    // Ancres : points d'accroche délibérés → priorité absolue (dans un rayon de 30 cm)
+    for (const a of ancresRef.current) {
+      if (new THREE.Vector3(a.x, a.y, a.z).distanceTo(hit.point) < 0.3)
+        return new THREE.Vector3(a.x, a.y, a.z);
+    }
     const mesh = hit.object as THREE.Mesh;
     if (mesh.isMesh && hit.face) {
       const pos = (mesh.geometry as THREE.BufferGeometry).attributes.position;
@@ -696,7 +896,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   }
 
   // Un seul outil actif à la fois
-  function activerMode(mode: "mur" | "mesure" | "niveau" | "pipette" | "ouverture" | "dalle" | "toit" | null) {
+  function activerMode(mode: "mur" | "mesure" | "niveau" | "pipette" | "ouverture" | "dalle" | "toit" | "ancre" | null) {
     annulerDraft();
     annulerMesureDraft();
     annulerNiveauDraft();
@@ -709,6 +909,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     setOuvMode(mode === "ouverture");
     setDalleMode(mode === "dalle");
     setToitMode(mode === "toit");
+    setAncreMode(mode === "ancre");
   }
 
   function poserPointMur(p: THREE.Vector3) {
@@ -744,7 +945,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         if (scene) {
           const prev = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), murMaterial());
           poserMurMesh(prev, { id: "", ax: draft.x, az: draft.z, bx: p.x, bz: p.z,
-            epaisseur: 0.04, hauteur: 2.7, base_y: murBaseYRef.current, decalage: 0 }, []);
+            epaisseur: 0.04, hauteur: 2.7, base_y: murBaseYRef.current, decalage: 0 }, [], []);
           scene.add(prev);
           pendingMeshRef.current = prev;
         }
@@ -879,24 +1080,39 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       return ray;
     };
     let downPos: { x: number; y: number } | null = null;
-    let drag: { id: string; orig: Mur; start: THREE.Vector3; base: THREE.Vector3;
-                plane: THREE.Plane; dx: number; dz: number; moved: boolean } | null = null;
+    type WallDrag =
+      | { kind: "move"; id: string; orig: Mur; start: THREE.Vector3; base: THREE.Vector3;
+          plane: THREE.Plane; dx: number; dz: number; moved: boolean }
+      | { kind: "end"; id: string; orig: Mur; end: "a" | "b"; hy: number;
+          curX: number; curZ: number; moved: boolean };
+    let drag: WallDrag | null = null;
 
     const onDown = (e: PointerEvent) => {
       downPos = { x: e.clientX, y: e.clientY };
-      // Déplacement : le drag démarre sur le mur sélectionné (hors modes outils)
+      // Édition : drag d'une poignée ou déplacement du mur sélectionné (hors modes outils)
       if (murModeRef.current || pipetteRef.current || mesureModeRef.current
           || niveauModeRef.current || ouvModeRef.current || dalleModeRef.current
-          || toitModeRef.current || e.button !== 0) return;
+          || toitModeRef.current || ancreModeRef.current || e.button !== 0) return;
       const selId = murSelRef.current;
       if (!selId) return;
-      const mesh = murMeshMapRef.current.get(selId);
       const mur = mursRef.current.find((m) => m.id === selId);
-      if (!mesh || !mur) return;
+      if (!mur) return;
+      // 1) poignée d'extrémité prioritaire
+      const hHit = makeRay(e).intersectObjects(handleMeshesRef.current)[0];
+      if (hHit) {
+        const end = hHit.object.userData.handleEnd as "a" | "b";
+        drag = { kind: "end", id: selId, orig: { ...mur }, end, hy: hHit.object.position.y,
+                 curX: end === "a" ? mur.ax : mur.bx, curZ: end === "a" ? mur.az : mur.bz, moved: false };
+        controls.enabled = false;
+        return;
+      }
+      // 2) déplacement du corps
+      const mesh = murMeshMapRef.current.get(selId);
+      if (!mesh) return;
       const hit = makeRay(e).intersectObject(mesh)[0];
       if (!hit) return;
       drag = {
-        id: selId, orig: { ...mur }, start: hit.point.clone(), base: mesh.position.clone(),
+        kind: "move", id: selId, orig: { ...mur }, start: hit.point.clone(), base: mesh.position.clone(),
         plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -hit.point.y),
         dx: 0, dz: 0, moved: false,
       };
@@ -905,14 +1121,37 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
 
     const onMove = (e: PointerEvent) => {
       if (!drag) return;
-      const p = new THREE.Vector3();
-      if (!makeRay(e).ray.intersectPlane(drag.plane, p)) return;
-      drag.dx = p.x - drag.start.x;
-      drag.dz = p.z - drag.start.z;
-      if (!drag.moved && Math.hypot(drag.dx, drag.dz) < 0.01) return;
-      drag.moved = true;
-      const mesh = murMeshMapRef.current.get(drag.id);
-      if (mesh) mesh.position.set(drag.base.x + drag.dx, drag.base.y, drag.base.z + drag.dz);
+      const ray = makeRay(e);
+      if (drag.kind === "move") {
+        const p = new THREE.Vector3();
+        if (!ray.ray.intersectPlane(drag.plane, p)) return;
+        drag.dx = p.x - drag.start.x;
+        drag.dz = p.z - drag.start.z;
+        if (!drag.moved && Math.hypot(drag.dx, drag.dz) < 0.01) return;
+        drag.moved = true;
+        const mesh = murMeshMapRef.current.get(drag.id);
+        if (mesh) mesh.position.set(drag.base.x + drag.dx, drag.base.y, drag.base.z + drag.dz);
+        return;
+      }
+      // Extrémité : suit la surface du scan (accrochée) ou le plan horizontal de la poignée
+      const ed = drag;
+      let x: number, z: number;
+      const hit = ray.intersectObjects([...meshMapRef.current.values()], true)[0];
+      if (hit) { const sp = meshVertexSnap(hit); x = sp.x; z = sp.z; }
+      else {
+        const gp = new THREE.Vector3();
+        if (!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -ed.hy), gp)) return;
+        x = gp.x; z = gp.z;
+      }
+      const s = snapXZ(x, z, ed.id);
+      ed.curX = s.x; ed.curZ = s.z; ed.moved = true;
+      const tmp: Mur = { ...ed.orig,
+        ...(ed.end === "a" ? { ax: s.x, az: s.z } : { bx: s.x, bz: s.z }) };
+      const mesh = murMeshMapRef.current.get(ed.id);
+      if (mesh) poserMurMesh(mesh, tmp,
+        ouverturesRef.current.filter((o) => o.mur_id === ed.id), toitsRef.current);
+      const h = handleMeshesRef.current.find((hh) => hh.userData.handleEnd === ed.end);
+      if (h) h.position.set(s.x, ed.hy, s.z);
     };
 
     const onUp = (e: PointerEvent) => {
@@ -922,6 +1161,10 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         drag = null;
         downPos = null;
         if (!d.moved) return;
+        if (d.kind === "end") {
+          majMur(d.id, d.end === "a" ? { ax: d.curX, az: d.curZ } : { bx: d.curX, bz: d.curZ });
+          return;
+        }
         let { dx, dz } = d;
         // Accrochage au lâcher : extrémité déplacée proche d'une extrémité d'un autre mur
         let best: { ddx: number; ddz: number } | null = null;
@@ -948,6 +1191,12 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       if (moved > 5 || e.button !== 0) return;
       const ray = makeRay(e);
       const cibles = [...meshMapRef.current.values()];
+      // Ancre : le point cliqué sur le scan devient une cible d'accroche (mode actif)
+      if (ancreModeRef.current) {
+        const hit = ray.intersectObjects(cibles, true)[0];
+        if (hit) creerAncre(snapPick(hit));
+        return;
+      }
       // Pipette : le point cliqué sur le scan définit le niveau 0
       if (pipetteRef.current) {
         const hit = ray.intersectObjects(cibles, true)[0];
@@ -1120,6 +1369,8 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       mesureGroupMapRef.current.clear();
       dalleMeshMapRef.current.clear();
       toitMeshMapRef.current.clear();
+      ancreMeshMapRef.current.clear();
+      handleMeshesRef.current = [];
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1188,6 +1439,41 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
             {niveauMode ? (niveauDraft ? "Cliquez le 2e point…" : "Cliquez le 1er point…") : "⟂ Mettre à niveau"}
           </button>
         </div>
+
+        {/* Ancres */}
+        {chantierId && (
+          <div className="p-4 border-b border-slate-100">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+              📍 Ancres — {ancres.length}
+            </p>
+            <button
+              onClick={() => activerMode(ancreMode ? null : "ancre")}
+              title="Cliquez des points caractéristiques du scan (coins, arêtes). Les murs s'y accrochent en priorité (rayon 30 cm)."
+              className="w-full py-1.5 rounded-lg text-xs font-medium border transition-colors"
+              style={ancreMode
+                ? { background: "#d946ef", color: "white", borderColor: "#d946ef" }
+                : { borderColor: "#e2e8f0", color: "#64748b" }}>
+              {ancreMode ? "Cliquez un point du scan…" : "＋ Poser des ancres"}
+            </button>
+            {ancres.length > 0 && (
+              <div className="flex flex-col gap-1 mt-2">
+                {ancres.map((a, i) => (
+                  <div key={a.id}
+                    className="group flex items-center gap-2 text-xs text-slate-600 border border-slate-100 rounded px-2 py-1">
+                    <span className="text-fuchsia-500">◆</span>
+                    <span className="text-slate-400">{i + 1}.</span>
+                    <span className="font-mono text-[10px] text-slate-400">
+                      {a.x.toFixed(1)}, {a.z.toFixed(1)}
+                    </span>
+                    <button onClick={() => supprimerAncre(a.id)}
+                      className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
+                      title="Supprimer l'ancre">🗑</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Mesures */}
         <div className="p-4 border-b border-slate-100">
@@ -1563,9 +1849,14 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
               "🏠 Cliquez un point du faîtage (haut de pente)"][toitDraft.length]}
           </div>
         )}
-        {!murMode && !pipette && !mesureMode && !niveauMode && !ouvMode && !dalleMode && !toitMode && murSel && (
+        {ancreMode && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
-            ↔ Glissez le mur bleu pour le déplacer · Échap ou clic dans le vide pour désélectionner
+            📍 Cliquez des points caractéristiques du scan (coins, arêtes) — les murs s&apos;y accrocheront (Échap : sortir)
+          </div>
+        )}
+        {!murMode && !pipette && !mesureMode && !niveauMode && !ouvMode && !dalleMode && !toitMode && !ancreMode && murSel && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
+            ↔ Glissez le corps pour déplacer · les <span className="text-cyan-300">poignées cyan</span> pour allonger/ajuster (accrochage ancres, murs) · Échap : désélectionner
           </div>
         )}
       </div>
