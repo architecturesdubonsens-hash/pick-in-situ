@@ -60,7 +60,7 @@ function etiquetteMesure(text: string) {
   return spr;
 }
 
-// ── Outil Mur (scan-to-BIM) ───────────────────────────────────────────────────
+// ── Outils BIM (scan-to-BIM) ──────────────────────────────────────────────────
 interface Mur {
   id: string;
   ax: number; az: number;
@@ -71,23 +71,130 @@ interface Mur {
   decalage: number; // 0 = ligne tracée sur l'axe ; ±0.5 = ligne sur un nu (× épaisseur)
 }
 
+interface Ouverture {
+  id: string;
+  mur_id: string;
+  pos: number;     // centre, distance le long de l'axe depuis l'extrémité A
+  largeur: number;
+  hauteur: number;
+  allege: number;  // depuis la base du mur (0 = porte)
+}
+
+interface Dalle {
+  id: string;
+  points: [number, number][]; // polygone [x, z]
+  epaisseur: number;
+  base_y: number;             // niveau fini supérieur
+}
+
+interface Toit {
+  id: string;
+  p1: [number, number, number]; // égout 1
+  p2: [number, number, number]; // égout 2
+  p3: [number, number, number]; // faîtage
+  epaisseur: number;
+}
+
 function murMaterial() {
   return new THREE.MeshStandardMaterial({
     color: 0xf97316, transparent: true, opacity: 0.55, roughness: 0.6,
-    depthWrite: false,
+    depthWrite: false, side: THREE.DoubleSide,
   });
 }
 
-function poserMurMesh(mesh: THREE.Mesh, m: Mur) {
+function bimMaterial(color: number) {
+  return new THREE.MeshStandardMaterial({
+    color, transparent: true, opacity: 0.5, roughness: 0.6,
+    depthWrite: false, side: THREE.DoubleSide,
+  });
+}
+
+// Élévation du mur (longueur × hauteur) avec les ouvertures en trous, extrudée
+// sur l'épaisseur — géométrie locale : X = axe, Y = hauteur (0 à h), Z = épaisseur
+function murGeometry(m: Mur, len: number, ouvertures: Ouverture[]) {
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0); shape.lineTo(len, 0); shape.lineTo(len, m.hauteur);
+  shape.lineTo(0, m.hauteur); shape.closePath();
+  for (const o of ouvertures) {
+    const x0 = Math.max(0.01, o.pos - o.largeur / 2);
+    const x1 = Math.min(len - 0.01, o.pos + o.largeur / 2);
+    const y0 = Math.max(0, o.allege);
+    const y1 = Math.min(m.hauteur - 0.01, o.allege + o.hauteur);
+    if (x1 - x0 < 0.02 || y1 - y0 < 0.02) continue;
+    const trou = new THREE.Path();
+    trou.moveTo(x0, y0); trou.lineTo(x1, y0); trou.lineTo(x1, y1);
+    trou.lineTo(x0, y1); trou.closePath();
+    shape.holes.push(trou);
+  }
+  const g = new THREE.ExtrudeGeometry(shape, { depth: m.epaisseur, bevelEnabled: false });
+  g.translate(-len / 2, 0, -m.epaisseur / 2);
+  return g;
+}
+
+function poserMurMesh(mesh: THREE.Mesh, m: Mur, ouvertures: Ouverture[]) {
   const dx = m.bx - m.ax, dz = m.bz - m.az;
   const len = Math.max(0.05, Math.hypot(dx, dz));
   // Décalage perpendiculaire : la ligne tracée est l'axe (0) ou un nu (±0.5 × ép.)
   const off = (m.decalage ?? 0) * m.epaisseur;
   const nx = -dz / len, nz = dx / len;
   mesh.geometry.dispose();
-  mesh.geometry = new THREE.BoxGeometry(len, m.hauteur, m.epaisseur);
-  mesh.position.set((m.ax + m.bx) / 2 + nx * off, m.base_y + m.hauteur / 2, (m.az + m.bz) / 2 + nz * off);
+  mesh.geometry = murGeometry(m, len, ouvertures);
+  mesh.position.set((m.ax + m.bx) / 2 + nx * off, m.base_y, (m.az + m.bz) / 2 + nz * off);
   mesh.rotation.y = -Math.atan2(dz, dx);
+}
+
+// Dalle : polygone au sol extrudé vers le bas depuis son niveau fini supérieur
+function dalleGeometry(d: Dalle) {
+  const shape = new THREE.Shape();
+  d.points.forEach(([x, z], i) => (i ? shape.lineTo(x, z) : shape.moveTo(x, z)));
+  shape.closePath();
+  const g = new THREE.ExtrudeGeometry(shape, { depth: d.epaisseur, bevelEnabled: false });
+  g.rotateX(Math.PI / 2); // plan XY → horizontal, extrusion vers le bas
+  return g;
+}
+
+function aireDalle(points: [number, number][]) {
+  let a = 0;
+  for (let i = 0; i < points.length; i++) {
+    const [x1, z1] = points[i], [x2, z2] = points[(i + 1) % points.length];
+    a += x1 * z2 - x2 * z1;
+  }
+  return Math.abs(a) / 2;
+}
+
+// Pan de toiture : parallélogramme égout p1-p2 → faîtage p3, prisme d'épaisseur ep
+function toitVecteurs(t: Toit) {
+  const p1 = new THREE.Vector3(t.p1[0], t.p1[1], t.p1[2]);
+  const p2 = new THREE.Vector3(t.p2[0], t.p2[1], t.p2[2]);
+  const p3 = new THREE.Vector3(t.p3[0], t.p3[1], t.p3[2]);
+  const e = p2.clone().sub(p1);                       // direction d'égout
+  const el = e.clone().normalize();
+  const s = p3.clone().sub(p1);                       // rampant : composante ⊥ à l'égout
+  s.sub(el.clone().multiplyScalar(s.dot(el)));
+  return { p1, p2, e, s };
+}
+
+function toitGeometry(t: Toit) {
+  const { p1, p2, e, s } = toitVecteurs(t);
+  let n = new THREE.Vector3().crossVectors(e, s).normalize();
+  if (n.y < 0) n.negate();
+  const c0 = p1, c1 = p2, c2 = p2.clone().add(s), c3 = p1.clone().add(s);
+  const down = n.clone().multiplyScalar(-t.epaisseur);
+  const [b0, b1, b2, b3] = [c0, c1, c2, c3].map((c) => c.clone().add(down));
+  const v: number[] = [];
+  const tri = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3) =>
+    v.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+  const quad = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.Vector3) => {
+    tri(a, b, c); tri(a, c, d);
+  };
+  quad(c0, c1, c2, c3);                     // dessus
+  quad(b3, b2, b1, b0);                     // dessous
+  quad(c0, b0, b1, c1); quad(c1, b1, b2, c2);
+  quad(c2, b2, b3, c3); quad(c3, b3, b0, c0);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(v, 3));
+  g.computeVertexNormals();
+  return g;
 }
 
 export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
@@ -117,6 +224,31 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   const pipetteRef = useRef(false);
   const murPendingRef = useRef<{ a: THREE.Vector3; b: THREE.Vector3 } | null>(null);
   const pendingMeshRef = useRef<THREE.Mesh | null>(null);
+
+  // ── Ouvertures / Dalles / Toits ──
+  const [ouvertures, setOuvertures] = useState<Ouverture[]>([]);
+  const [ouvMode, setOuvMode] = useState(false);
+  const [dalles, setDalles] = useState<Dalle[]>([]);
+  const [dalleMode, setDalleMode] = useState(false);
+  const [dalleDraft, setDalleDraft] = useState<THREE.Vector3[]>([]);
+  const [toits, setToits] = useState<Toit[]>([]);
+  const [toitMode, setToitMode] = useState(false);
+  const [toitDraft, setToitDraft] = useState<THREE.Vector3[]>([]);
+  const ouvModeRef = useRef(false);
+  const dalleModeRef = useRef(false);
+  const dalleDraftRef = useRef<THREE.Vector3[]>([]);
+  const toitModeRef = useRef(false);
+  const toitDraftRef = useRef<THREE.Vector3[]>([]);
+  const dalleMarkersRef = useRef<THREE.Mesh[]>([]);
+  const dalleLineRef = useRef<THREE.Line | null>(null);
+  const toitMarkersRef = useRef<THREE.Mesh[]>([]);
+  const dalleMeshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
+  const toitMeshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
+  useEffect(() => { ouvModeRef.current = ouvMode; }, [ouvMode]);
+  useEffect(() => { dalleModeRef.current = dalleMode; }, [dalleMode]);
+  useEffect(() => { dalleDraftRef.current = dalleDraft; }, [dalleDraft]);
+  useEffect(() => { toitModeRef.current = toitMode; }, [toitMode]);
+  useEffect(() => { toitDraftRef.current = toitDraft; }, [toitDraft]);
 
   // ── Mesures (10 dernières) + mise à niveau ──
   const [mesures, setMesures] = useState<Mesure[]>([]);
@@ -206,11 +338,22 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     setSaved(false);
   }
 
-  // ── Murs : chargement + CRUD ──
+  // ── Éléments BIM : chargement + CRUD ──
   useEffect(() => {
     if (!chantierId) return;
     db.from("bim_murs").select("*").eq("chantier_id", chantierId)
-      .then(({ data }) => { if (data) setMurs(data as Mur[]); });
+      .then(({ data }) => {
+        if (!data) return;
+        setMurs(data as Mur[]);
+        const ids = (data as Mur[]).map((m) => m.id);
+        if (ids.length)
+          db.from("bim_ouvertures").select("*").in("mur_id", ids)
+            .then(({ data: o }) => { if (o) setOuvertures(o as Ouverture[]); });
+      });
+    db.from("bim_dalles").select("*").eq("chantier_id", chantierId)
+      .then(({ data }) => { if (data) setDalles(data as Dalle[]); });
+    db.from("bim_toits").select("*").eq("chantier_id", chantierId)
+      .then(({ data }) => { if (data) setToits(data as Toit[]); });
   }, [chantierId]);
 
   // Synchronise les meshes de murs avec l'état
@@ -229,13 +372,53 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         murMeshMapRef.current.set(m.id, mesh);
         scene.add(mesh);
       }
-      poserMurMesh(mesh, m);
+      poserMurMesh(mesh, m, ouvertures.filter((o) => o.mur_id === m.id));
       const mat = mesh.material as THREE.MeshStandardMaterial;
       const sel = m.id === murSel;
       mat.color.setHex(sel ? 0x2563eb : 0xf97316);
       mat.opacity = sel ? 0.75 : 0.55;
     }
-  }, [murs, murSel]);
+  }, [murs, murSel, ouvertures]);
+
+  // Synchronise les meshes de dalles et de toits
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const vivantes = new Set(dalles.map((d) => d.id));
+    for (const [id, mesh] of dalleMeshMapRef.current) {
+      if (!vivantes.has(id)) { scene.remove(mesh); mesh.geometry.dispose(); dalleMeshMapRef.current.delete(id); }
+    }
+    for (const d of dalles) {
+      let mesh = dalleMeshMapRef.current.get(d.id);
+      if (!mesh) {
+        mesh = new THREE.Mesh(new THREE.BufferGeometry(), bimMaterial(0x64748b));
+        dalleMeshMapRef.current.set(d.id, mesh);
+        scene.add(mesh);
+      }
+      mesh.geometry.dispose();
+      mesh.geometry = dalleGeometry(d);
+      mesh.position.set(0, d.base_y, 0);
+    }
+  }, [dalles]);
+
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const vivants = new Set(toits.map((t) => t.id));
+    for (const [id, mesh] of toitMeshMapRef.current) {
+      if (!vivants.has(id)) { scene.remove(mesh); mesh.geometry.dispose(); toitMeshMapRef.current.delete(id); }
+    }
+    for (const t of toits) {
+      let mesh = toitMeshMapRef.current.get(t.id);
+      if (!mesh) {
+        mesh = new THREE.Mesh(new THREE.BufferGeometry(), bimMaterial(0xb91c1c));
+        toitMeshMapRef.current.set(t.id, mesh);
+        scene.add(mesh);
+      }
+      mesh.geometry.dispose();
+      mesh.geometry = toitGeometry(t); // géométrie en coordonnées monde
+    }
+  }, [toits]);
 
   async function creerMur(a: THREE.Vector3, b: THREE.Vector3, decalage: number) {
     if (!chantierId) return;
@@ -254,8 +437,149 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   }
 
   async function supprimerMur(id: string) {
-    await db.from("bim_murs").delete().eq("id", id);
+    await db.from("bim_murs").delete().eq("id", id); // cascade sur bim_ouvertures
     setMurs((prev) => prev.filter((m) => m.id !== id));
+    setOuvertures((prev) => prev.filter((o) => o.mur_id !== id));
+  }
+
+  // ── Ouvertures : CRUD ──
+  async function creerOuverture(murId: string, pos: number, allege: number) {
+    const row = { mur_id: murId, pos, largeur: 1.0, hauteur: 1.15, allege };
+    const { data, error } = await db.from("bim_ouvertures").insert(row).select("*").single();
+    if (error) { alert(`Ouverture non enregistrée : ${error.message}`); return; }
+    setOuvertures((prev) => [...prev, data as Ouverture]);
+  }
+
+  function majOuverture(id: string, patch: Partial<Ouverture>) {
+    setOuvertures((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)));
+    db.from("bim_ouvertures").update(patch).eq("id", id).then(({ error }) => {
+      if (error) console.warn("[bim_ouvertures] update:", error.message);
+    });
+  }
+
+  async function supprimerOuverture(id: string) {
+    await db.from("bim_ouvertures").delete().eq("id", id);
+    setOuvertures((prev) => prev.filter((o) => o.id !== id));
+  }
+
+  // ── Dalles : CRUD + tracé polygonal ──
+  async function creerDalle(pts: [number, number][]) {
+    if (!chantierId) return;
+    const row = { chantier_id: chantierId, points: pts, epaisseur: 0.2, base_y: murBaseYRef.current };
+    const { data, error } = await db.from("bim_dalles").insert(row).select("*").single();
+    if (error) { alert(`Dalle non enregistrée : ${error.message}`); return; }
+    setDalles((prev) => [...prev, data as Dalle]);
+  }
+
+  function majDalle(id: string, patch: Partial<Dalle>) {
+    setDalles((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+    db.from("bim_dalles").update(patch).eq("id", id).then(({ error }) => {
+      if (error) console.warn("[bim_dalles] update:", error.message);
+    });
+  }
+
+  async function supprimerDalle(id: string) {
+    await db.from("bim_dalles").delete().eq("id", id);
+    setDalles((prev) => prev.filter((d) => d.id !== id));
+  }
+
+  function majDalleLigne(draft: THREE.Vector3[]) {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    if (dalleLineRef.current) {
+      scene.remove(dalleLineRef.current);
+      dalleLineRef.current.geometry.dispose();
+      dalleLineRef.current = null;
+    }
+    if (draft.length >= 2) {
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(draft),
+        new THREE.LineBasicMaterial({ color: 0x64748b, depthTest: false })
+      );
+      line.renderOrder = 3;
+      scene.add(line);
+      dalleLineRef.current = line;
+    }
+  }
+
+  function annulerDalleDraft() {
+    setDalleDraft([]);
+    const scene = sceneRef.current;
+    for (const m of dalleMarkersRef.current) {
+      if (scene) scene.remove(m);
+      m.geometry.dispose();
+    }
+    dalleMarkersRef.current = [];
+    majDalleLigne([]);
+  }
+
+  function finirDalle() {
+    const draft = dalleDraftRef.current;
+    if (draft.length >= 3) {
+      creerDalle(draft.map((v) => [Math.round(v.x * 100) / 100, Math.round(v.z * 100) / 100]));
+    }
+    annulerDalleDraft();
+    setDalleMode(false);
+  }
+
+  function poserPointDalle(p: THREE.Vector3) {
+    const draft = dalleDraftRef.current;
+    // re-clic près du 1er sommet (≥ 3 points) → fermeture du polygone
+    if (draft.length >= 3 && Math.hypot(p.x - draft[0].x, p.z - draft[0].z) < 0.3) {
+      finirDalle();
+      return;
+    }
+    const next = [...draft, p.clone()];
+    setDalleDraft(next);
+    const marker = creerMarqueur(p, 0x64748b, 0.04);
+    if (marker) dalleMarkersRef.current.push(marker);
+    majDalleLigne(next);
+  }
+
+  // ── Toits : CRUD + tracé 3 clics ──
+  async function creerToit(pts: THREE.Vector3[]) {
+    if (!chantierId) return;
+    const r = (v: THREE.Vector3): [number, number, number] =>
+      [Math.round(v.x * 100) / 100, Math.round(v.y * 100) / 100, Math.round(v.z * 100) / 100];
+    const row = { chantier_id: chantierId, p1: r(pts[0]), p2: r(pts[1]), p3: r(pts[2]), epaisseur: 0.2 };
+    const { data, error } = await db.from("bim_toits").insert(row).select("*").single();
+    if (error) { alert(`Toit non enregistré : ${error.message}`); return; }
+    setToits((prev) => [...prev, data as Toit]);
+  }
+
+  function majToit(id: string, patch: Partial<Toit>) {
+    setToits((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+    db.from("bim_toits").update(patch).eq("id", id).then(({ error }) => {
+      if (error) console.warn("[bim_toits] update:", error.message);
+    });
+  }
+
+  async function supprimerToit(id: string) {
+    await db.from("bim_toits").delete().eq("id", id);
+    setToits((prev) => prev.filter((t) => t.id !== id));
+  }
+
+  function annulerToitDraft() {
+    setToitDraft([]);
+    const scene = sceneRef.current;
+    for (const m of toitMarkersRef.current) {
+      if (scene) scene.remove(m);
+      m.geometry.dispose();
+    }
+    toitMarkersRef.current = [];
+  }
+
+  function poserPointToit(p: THREE.Vector3) {
+    const next = [...toitDraftRef.current, p.clone()];
+    if (next.length >= 3) {
+      creerToit(next);
+      annulerToitDraft();
+      setToitMode(false);
+      return;
+    }
+    setToitDraft(next);
+    const marker = creerMarqueur(p, 0xb91c1c, 0.04);
+    if (marker) toitMarkersRef.current.push(marker);
   }
 
   // Accrochage : sommet du triangle touché (niv. 2) puis extrémités de murs (niv. 4)
@@ -372,14 +696,19 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   }
 
   // Un seul outil actif à la fois
-  function activerMode(mode: "mur" | "mesure" | "niveau" | "pipette" | null) {
+  function activerMode(mode: "mur" | "mesure" | "niveau" | "pipette" | "ouverture" | "dalle" | "toit" | null) {
     annulerDraft();
     annulerMesureDraft();
     annulerNiveauDraft();
+    annulerDalleDraft();
+    annulerToitDraft();
     setMurMode(mode === "mur");
     setMesureMode(mode === "mesure");
     setNiveauMode(mode === "niveau");
     setPipette(mode === "pipette");
+    setOuvMode(mode === "ouverture");
+    setDalleMode(mode === "dalle");
+    setToitMode(mode === "toit");
   }
 
   function poserPointMur(p: THREE.Vector3) {
@@ -415,7 +744,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         if (scene) {
           const prev = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), murMaterial());
           poserMurMesh(prev, { id: "", ax: draft.x, az: draft.z, bx: p.x, bz: p.z,
-            epaisseur: 0.04, hauteur: 2.7, base_y: murBaseYRef.current, decalage: 0 });
+            epaisseur: 0.04, hauteur: 2.7, base_y: murBaseYRef.current, decalage: 0 }, []);
           scene.add(prev);
           pendingMeshRef.current = prev;
         }
@@ -494,6 +823,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") { activerMode(null); setMurSel(null); }
+      if (e.key === "Enter" && dalleModeRef.current && dalleDraftRef.current.length >= 3) finirDalle();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -556,7 +886,8 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       downPos = { x: e.clientX, y: e.clientY };
       // Déplacement : le drag démarre sur le mur sélectionné (hors modes outils)
       if (murModeRef.current || pipetteRef.current || mesureModeRef.current
-          || niveauModeRef.current || e.button !== 0) return;
+          || niveauModeRef.current || ouvModeRef.current || dalleModeRef.current
+          || toitModeRef.current || e.button !== 0) return;
       const selId = murSelRef.current;
       if (!selId) return;
       const mesh = murMeshMapRef.current.get(selId);
@@ -628,6 +959,34 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       if (mesureModeRef.current) {
         const hit = ray.intersectObjects(cibles, true)[0];
         if (hit) poserPointMesure(snapPick(hit));
+        return;
+      }
+      // Ouverture : clic sur un mur → percement centré sur le point cliqué
+      if (ouvModeRef.current) {
+        const hit = ray.intersectObjects([...murMeshMapRef.current.values()])[0];
+        if (!hit) return;
+        const murId = hit.object.userData.murId as string;
+        const m = mursRef.current.find((x) => x.id === murId);
+        if (!m) return;
+        const len = Math.hypot(m.bx - m.ax, m.bz - m.az);
+        const LARG = 1.0, HAUT = 1.15;
+        let pos = ((hit.point.x - m.ax) * (m.bx - m.ax) + (hit.point.z - m.az) * (m.bz - m.az)) / len;
+        pos = Math.round(Math.min(Math.max(pos, LARG / 2 + 0.05), len - LARG / 2 - 0.05) * 100) / 100;
+        let allege = hit.point.y - m.base_y - HAUT / 2;
+        allege = Math.round(Math.min(Math.max(allege, 0), Math.max(0, m.hauteur - HAUT - 0.05)) * 100) / 100;
+        creerOuverture(murId, pos, allege);
+        return; // le mode reste actif pour enchaîner
+      }
+      // Dalle : clics des sommets au sol, fermeture par re-clic du 1er point ou Entrée
+      if (dalleModeRef.current) {
+        const hit = ray.intersectObjects(cibles, true)[0];
+        if (hit) poserPointDalle(snapPick(hit));
+        return;
+      }
+      // Toit : 3 clics — égout 1, égout 2, faîtage
+      if (toitModeRef.current) {
+        const hit = ray.intersectObjects(cibles, true)[0];
+        if (hit) poserPointToit(snapPick(hit));
         return;
       }
       // Mise à niveau : 2 clics sur une ligne censée être horizontale
@@ -759,6 +1118,8 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       meshMapRef.current.clear();
       murMeshMapRef.current.clear();
       mesureGroupMapRef.current.clear();
+      dalleMeshMapRef.current.clear();
+      toitMeshMapRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -907,6 +1268,17 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                 ? (murPending ? "Cliquez le côté du mur…" : murDraft ? "Cliquez le 2e point…" : "Cliquez le 1er point…")
                 : "＋ Tracer un mur"}
             </button>
+            {murs.length > 0 && (
+              <button
+                onClick={() => activerMode(ouvMode ? null : "ouverture")}
+                title="Cliquez sur un mur à l'endroit de l'ouverture (fenêtre 100×115 par défaut, modifiable ensuite)"
+                className="w-full py-1.5 rounded-lg text-xs font-medium border transition-colors mb-2"
+                style={ouvMode
+                  ? { background: "#f97316", color: "white", borderColor: "#f97316" }
+                  : { borderColor: "#e2e8f0", color: "#64748b" }}>
+                {ouvMode ? "Cliquez sur un mur…" : "🚪 ＋ Ouverture"}
+              </button>
+            )}
             <div className="flex flex-col gap-1.5">
               {murs.map((m, i) => {
                 const len = Math.hypot(m.bx - m.ax, m.bz - m.az);
@@ -942,6 +1314,123 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                       <span className="text-[10px] text-slate-400">base</span>
                       <input type="number" step={0.01} value={m.base_y}
                         onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majMur(m.id, { base_y: v }); }}
+                        className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
+                      <span className="text-[10px] text-slate-400">m</span>
+                    </div>
+                    {ouvertures.filter((o) => o.mur_id === m.id).map((o, j) => (
+                      <div key={o.id} className="group/ouv ml-1 mt-1 border-l-2 border-orange-200 pl-1.5">
+                        <div className="flex items-center gap-1 text-[10px] text-slate-500">
+                          <span>🚪 {j + 1}</span>
+                          <span className="text-slate-400">l.</span>
+                          <input type="number" min={0.2} max={6} step={0.05} value={o.largeur}
+                            onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majOuverture(o.id, { largeur: v }); }}
+                            className="w-11 border border-slate-200 rounded px-1 py-0.5 text-[10px] font-mono"/>
+                          <span className="text-slate-400">h.</span>
+                          <input type="number" min={0.2} max={6} step={0.05} value={o.hauteur}
+                            onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majOuverture(o.id, { hauteur: v }); }}
+                            className="w-11 border border-slate-200 rounded px-1 py-0.5 text-[10px] font-mono"/>
+                          <button onClick={(e) => { e.stopPropagation(); supprimerOuverture(o.id); }}
+                            className="ml-auto opacity-0 group-hover/ouv:opacity-70 hover:!opacity-100 text-[10px]"
+                            title="Supprimer l'ouverture">🗑</button>
+                        </div>
+                        <div className="flex items-center gap-1 mt-0.5 text-[10px] text-slate-400">
+                          <span>allège</span>
+                          <input type="number" min={0} step={0.05} value={o.allege}
+                            onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majOuverture(o.id, { allege: v }); }}
+                            className="w-11 border border-slate-200 rounded px-1 py-0.5 text-[10px] font-mono"/>
+                          <span>pos.</span>
+                          <input type="number" min={0} step={0.05} value={o.pos}
+                            onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majOuverture(o.id, { pos: v }); }}
+                            className="w-11 border border-slate-200 rounded px-1 py-0.5 text-[10px] font-mono"/>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Dalles */}
+        {chantierId && (
+          <div className="p-4 border-b border-slate-100">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+              ⬜ Dalles — {dalles.length}
+            </p>
+            <button
+              onClick={() => activerMode(dalleMode ? null : "dalle")}
+              title="Cliquez les sommets du polygone au sol — fermez en recliquant le 1er point (ou Entrée). Niveau fini = Niveau 0 des murs."
+              className="w-full py-1.5 rounded-lg text-xs font-medium border transition-colors mb-2"
+              style={dalleMode
+                ? { background: "#64748b", color: "white", borderColor: "#64748b" }
+                : { borderColor: "#e2e8f0", color: "#64748b" }}>
+              {dalleMode ? `Sommet ${dalleDraft.length + 1}… (Entrée : fermer)` : "＋ Tracer une dalle"}
+            </button>
+            <div className="flex flex-col gap-1.5">
+              {dalles.map((d, i) => (
+                <div key={d.id} className="group border border-slate-100 rounded-lg px-2 py-1.5">
+                  <div className="flex items-center gap-2 text-xs text-slate-600">
+                    <span className="font-medium">Dalle {i + 1}</span>
+                    <span className="font-mono text-slate-400">{aireDalle(d.points).toFixed(1)} m²</span>
+                    <button onClick={() => supprimerDalle(d.id)}
+                      className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
+                      title="Supprimer">🗑</button>
+                  </div>
+                  <div className="flex items-center gap-1 mt-1">
+                    <span className="text-[10px] text-slate-400">ép.</span>
+                    <input type="number" min={0.05} max={1} step={0.01} value={d.epaisseur}
+                      onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majDalle(d.id, { epaisseur: v }); }}
+                      className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
+                    <span className="text-[10px] text-slate-400 ml-1">niv.</span>
+                    <input type="number" step={0.01} value={d.base_y}
+                      onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majDalle(d.id, { base_y: v }); }}
+                      className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
+                    <span className="text-[10px] text-slate-400">m</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Toits */}
+        {chantierId && (
+          <div className="p-4 border-b border-slate-100">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+              🏠 Toits — {toits.length}
+            </p>
+            <button
+              onClick={() => activerMode(toitMode ? null : "toit")}
+              title="3 clics sur le scan : les 2 extrémités de l'égout, puis un point du faîtage — le pan s'aligne sur la pente"
+              className="w-full py-1.5 rounded-lg text-xs font-medium border transition-colors mb-2"
+              style={toitMode
+                ? { background: "#b91c1c", color: "white", borderColor: "#b91c1c" }
+                : { borderColor: "#e2e8f0", color: "#64748b" }}>
+              {toitMode
+                ? ["Cliquez l'égout (1er point)…", "Cliquez l'égout (2e point)…", "Cliquez le faîtage…"][toitDraft.length]
+                : "＋ Pan de toiture (3 clics)"}
+            </button>
+            <div className="flex flex-col gap-1.5">
+              {toits.map((t, i) => {
+                const { e: ev, s: sv } = toitVecteurs(t);
+                const aire = ev.length() * sv.length();
+                const pente = sv.length() > 0.01
+                  ? Math.round(Math.atan2(Math.abs(t.p3[1] - (t.p1[1] + t.p2[1]) / 2), Math.hypot(sv.x, sv.z)) * 180 / Math.PI)
+                  : 0;
+                return (
+                  <div key={t.id} className="group border border-slate-100 rounded-lg px-2 py-1.5">
+                    <div className="flex items-center gap-2 text-xs text-slate-600">
+                      <span className="font-medium">Pan {i + 1}</span>
+                      <span className="font-mono text-slate-400">{aire.toFixed(1)} m² · {pente}°</span>
+                      <button onClick={() => supprimerToit(t.id)}
+                        className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
+                        title="Supprimer">🗑</button>
+                    </div>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="text-[10px] text-slate-400">ép.</span>
+                      <input type="number" min={0.05} max={1} step={0.01} value={t.epaisseur}
+                        onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majToit(t.id, { epaisseur: v }); }}
                         className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
                       <span className="text-[10px] text-slate-400">m</span>
                     </div>
@@ -1055,7 +1544,26 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
               : "⟂ Cliquez 2 points qui devraient être à la même altitude (assise, gouttière, faîtage…)"}
           </div>
         )}
-        {!murMode && !pipette && !mesureMode && !niveauMode && murSel && (
+        {ouvMode && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
+            🚪 Cliquez sur un mur orange à l&apos;endroit de l&apos;ouverture — dimensions modifiables ensuite (Échap : sortir)
+          </div>
+        )}
+        {dalleMode && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
+            {dalleDraft.length >= 3
+              ? "⬜ Sommet suivant, ou fermez : re-clic du 1er point / Entrée (Échap : annuler)"
+              : `⬜ Cliquez le sommet ${dalleDraft.length + 1} du polygone au sol (3 minimum)`}
+          </div>
+        )}
+        {toitMode && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
+            {["🏠 Cliquez la 1re extrémité de l'égout (bas de pente)",
+              "🏠 Cliquez la 2e extrémité de l'égout",
+              "🏠 Cliquez un point du faîtage (haut de pente)"][toitDraft.length]}
+          </div>
+        )}
+        {!murMode && !pipette && !mesureMode && !niveauMode && !ouvMode && !dalleMode && !toitMode && murSel && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
             ↔ Glissez le mur bleu pour le déplacer · Échap ou clic dans le vide pour désélectionner
           </div>
