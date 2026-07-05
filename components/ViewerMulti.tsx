@@ -18,6 +18,7 @@ export interface ScanLayer {
 
 interface Props {
   chantierNom: string;
+  chantierId?: string;
   scans: ScanLayer[];
 }
 
@@ -29,10 +30,51 @@ interface ScanOffset {
   angle: number;
 }
 
-export default function ViewerMulti({ chantierNom, scans }: Props) {
+// ── Outil Mur (scan-to-BIM) ───────────────────────────────────────────────────
+interface Mur {
+  id: string;
+  ax: number; az: number;
+  bx: number; bz: number;
+  epaisseur: number;
+  hauteur: number;
+  base_y: number;
+}
+
+function murMaterial() {
+  return new THREE.MeshStandardMaterial({
+    color: 0xf97316, transparent: true, opacity: 0.55, roughness: 0.6,
+    depthWrite: false,
+  });
+}
+
+function poserMurMesh(mesh: THREE.Mesh, m: Mur) {
+  const dx = m.bx - m.ax, dz = m.bz - m.az;
+  const len = Math.max(0.05, Math.hypot(dx, dz));
+  mesh.geometry.dispose();
+  mesh.geometry = new THREE.BoxGeometry(len, m.hauteur, m.epaisseur);
+  mesh.position.set((m.ax + m.bx) / 2, m.base_y + m.hauteur / 2, (m.az + m.bz) / 2);
+  mesh.rotation.y = -Math.atan2(dz, dx);
+}
+
+export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const meshMapRef = useRef<Map<string, THREE.Group>>(new Map());
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+
+  // ── Murs BIM ──
+  const [murs, setMurs] = useState<Mur[]>([]);
+  const [murMode, setMurMode] = useState(false);
+  const [murDraft, setMurDraft] = useState<THREE.Vector3 | null>(null);
+  const murModeRef = useRef(false);
+  const murDraftRef = useRef<THREE.Vector3 | null>(null);
+  const mursRef = useRef<Mur[]>([]);
+  const murMeshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
+  const draftMarkerRef = useRef<THREE.Mesh | null>(null);
+  useEffect(() => { murModeRef.current = murMode; }, [murMode]);
+  useEffect(() => { murDraftRef.current = murDraft; }, [murDraft]);
+  useEffect(() => { mursRef.current = murs; }, [murs]);
 
   const [offsets, setOffsets] = useState<ScanOffset[]>(
     scans.map((s) => ({ id: s.id, x: s.offsetX, y: s.offsetY, z: s.offsetZ ?? 0, angle: s.angle }))
@@ -89,6 +131,113 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
     setSaved(false);
   }
 
+  // ── Murs : chargement + CRUD ──
+  useEffect(() => {
+    if (!chantierId) return;
+    db.from("bim_murs").select("*").eq("chantier_id", chantierId)
+      .then(({ data }) => { if (data) setMurs(data as Mur[]); });
+  }, [chantierId]);
+
+  // Synchronise les meshes de murs avec l'état
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const vivants = new Set(murs.map((m) => m.id));
+    for (const [id, mesh] of murMeshMapRef.current) {
+      if (!vivants.has(id)) { scene.remove(mesh); mesh.geometry.dispose(); murMeshMapRef.current.delete(id); }
+    }
+    for (const m of murs) {
+      let mesh = murMeshMapRef.current.get(m.id);
+      if (!mesh) {
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), murMaterial());
+        murMeshMapRef.current.set(m.id, mesh);
+        scene.add(mesh);
+      }
+      poserMurMesh(mesh, m);
+    }
+  }, [murs]);
+
+  async function creerMur(a: THREE.Vector3, b: THREE.Vector3) {
+    if (!chantierId) return;
+    const row = { chantier_id: chantierId, ax: a.x, az: a.z, bx: b.x, bz: b.z,
+                  epaisseur: 0.2, hauteur: 2.7, base_y: 0 };
+    const { data, error } = await db.from("bim_murs").insert(row).select("*").single();
+    if (error) { alert(`Mur non enregistré : ${error.message}`); return; }
+    setMurs((prev) => [...prev, data as Mur]);
+  }
+
+  function majMur(id: string, patch: Partial<Mur>) {
+    setMurs((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+    db.from("bim_murs").update(patch).eq("id", id).then(({ error }) => {
+      if (error) console.warn("[bim_murs] update:", error.message);
+    });
+  }
+
+  async function supprimerMur(id: string) {
+    await db.from("bim_murs").delete().eq("id", id);
+    setMurs((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  // Accrochage : sommet du triangle touché (niv. 2) puis extrémités de murs (niv. 4)
+  function snapPick(hit: THREE.Intersection): THREE.Vector3 {
+    let p = hit.point.clone();
+    const mesh = hit.object as THREE.Mesh;
+    if (mesh.isMesh && hit.face) {
+      const pos = (mesh.geometry as THREE.BufferGeometry).attributes.position;
+      let bd = 0.15;
+      for (const idx of [hit.face.a, hit.face.b, hit.face.c]) {
+        const v = new THREE.Vector3().fromBufferAttribute(pos, idx).applyMatrix4(mesh.matrixWorld);
+        const d = v.distanceTo(hit.point);
+        if (d < bd) { bd = d; p = v; }
+      }
+    }
+    let bw = 0.25;
+    for (const m of mursRef.current) {
+      for (const [ex, ez] of [[m.ax, m.az], [m.bx, m.bz]] as const) {
+        const d = Math.hypot(p.x - ex, p.z - ez);
+        if (d < bw) { bw = d; p = new THREE.Vector3(ex, p.y, ez); }
+      }
+    }
+    return p;
+  }
+
+  function poserPointMur(p: THREE.Vector3) {
+    const scene = sceneRef.current;
+    const draft = murDraftRef.current;
+    if (!draft) {
+      setMurDraft(p);
+      if (scene) {
+        const marker = new THREE.Mesh(
+          new THREE.SphereGeometry(0.09, 16, 16),
+          new THREE.MeshBasicMaterial({ color: 0xf97316, depthTest: false })
+        );
+        marker.renderOrder = 3;
+        marker.position.copy(p);
+        scene.add(marker);
+        draftMarkerRef.current = marker;
+      }
+      return;
+    }
+    if (draft.distanceTo(p) > 0.05) creerMur(draft, p);
+    annulerDraft();
+  }
+
+  function annulerDraft() {
+    setMurDraft(null);
+    if (draftMarkerRef.current && sceneRef.current) {
+      sceneRef.current.remove(draftMarkerRef.current);
+      draftMarkerRef.current.geometry.dispose();
+      draftMarkerRef.current = null;
+    }
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { annulerDraft(); setMurMode(false); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Init Three.js
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -119,9 +268,34 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
     renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(renderer.domElement);
 
+    cameraRef.current = camera;
+    rendererRef.current = renderer;
+
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
+
+    // Pick outil Mur : clic (pas drag) → raycast sur les scans → point accroché
+    let downPos: { x: number; y: number } | null = null;
+    const onDown = (e: PointerEvent) => { downPos = { x: e.clientX, y: e.clientY }; };
+    const onUp = (e: PointerEvent) => {
+      if (!murModeRef.current || !downPos) return;
+      const moved = Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y);
+      downPos = null;
+      if (moved > 5 || e.button !== 0) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      const mouse = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1
+      );
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(mouse, camera);
+      const cibles = [...meshMapRef.current.values()];
+      const hit = ray.intersectObjects(cibles, true)[0];
+      if (hit) poserPointMur(snapPick(hit));
+    };
+    renderer.domElement.addEventListener("pointerdown", onDown);
+    renderer.domElement.addEventListener("pointerup", onUp);
 
     // Charger chaque GLB
     const loader = new GLTFLoader();
@@ -198,10 +372,15 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
+      renderer.domElement.removeEventListener("pointerdown", onDown);
+      renderer.domElement.removeEventListener("pointerup", onUp);
       renderer.dispose();
       container.removeChild(renderer.domElement);
       sceneRef.current = null;
+      cameraRef.current = null;
+      rendererRef.current = null;
       meshMapRef.current.clear();
+      murMeshMapRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -260,6 +439,50 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
             })}
           </div>
         </div>
+
+        {/* Murs BIM */}
+        {chantierId && (
+          <div className="p-4 border-b border-slate-100">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+              🧱 Murs — {murs.length}
+            </p>
+            <button
+              onClick={() => { if (murMode) { annulerDraft(); setMurMode(false); } else setMurMode(true); }}
+              className="w-full py-1.5 rounded-lg text-xs font-medium border transition-colors mb-2"
+              style={murMode
+                ? { background: "#f97316", color: "white", borderColor: "#f97316" }
+                : { borderColor: "#e2e8f0", color: "#64748b" }}>
+              {murMode ? (murDraft ? "Cliquez le 2e point…" : "Cliquez le 1er point…") : "＋ Tracer un mur"}
+            </button>
+            <div className="flex flex-col gap-1.5">
+              {murs.map((m, i) => {
+                const len = Math.hypot(m.bx - m.ax, m.bz - m.az);
+                return (
+                  <div key={m.id} className="group border border-slate-100 rounded-lg px-2 py-1.5">
+                    <div className="flex items-center gap-2 text-xs text-slate-600">
+                      <span className="font-medium">Mur {i + 1}</span>
+                      <span className="font-mono text-slate-400">{len.toFixed(2)} m</span>
+                      <button onClick={() => supprimerMur(m.id)}
+                        className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
+                        title="Supprimer">🗑</button>
+                    </div>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="text-[10px] text-slate-400">ép.</span>
+                      <input type="number" min={0.05} max={1} step={0.01} value={m.epaisseur}
+                        onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majMur(m.id, { epaisseur: v }); }}
+                        className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
+                      <span className="text-[10px] text-slate-400 ml-1">h.</span>
+                      <input type="number" min={0.3} max={12} step={0.05} value={m.hauteur}
+                        onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) majMur(m.id, { hauteur: v }); }}
+                        className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
+                      <span className="text-[10px] text-slate-400">m</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Contrôles de la pièce sélectionnée */}
         {selOff && selScan && (
@@ -336,6 +559,13 @@ export default function ViewerMulti({ chantierNom, scans }: Props) {
         <div className="absolute top-3 right-3 bg-white/80 backdrop-blur text-xs text-slate-400 px-2 py-1 rounded pointer-events-none">
           {chantierNom}
         </div>
+        {murMode && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
+            {murDraft
+              ? "🧱 Cliquez le 2e point du mur sur le scan (Échap : annuler)"
+              : "🧱 Cliquez le 1er point du mur sur le scan — accrochage sommets et extrémités de murs"}
+          </div>
+        )}
       </div>
     </div>
   );

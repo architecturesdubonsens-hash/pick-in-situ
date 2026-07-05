@@ -115,7 +115,7 @@ export default function ChantierPage({ params }: { params: Promise<{ id: string 
         </div>
       ) : (
         <div className="flex-1 min-h-0">
-          {tab === "3d"    && <ViewerMulti   chantierNom={chantier.nom} scans={layers} />}
+          {tab === "3d"    && <ViewerMulti   chantierNom={chantier.nom} chantierId={id} scans={layers} />}
           {tab === "plans" && <PlanExtractor chantierNom={chantier.nom} scans={layers} />}
         </div>
       )}
