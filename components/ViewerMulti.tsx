@@ -711,7 +711,8 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
               }
             }
           });
-          const off = offsets.find((o) => o.id === scan.id) ?? { id: scan.id, x: 0, y: 0, z: 0, angle: 0 };
+          const off = offsets.find((o) => o.id === scan.id)
+            ?? { id: scan.id, x: 0, y: 0, z: 0, angle: 0, tx: 0, tz: 0 };
           applyOffset(group, off);
           scene.add(group);
           meshMapRef.current.set(scan.id, group);
