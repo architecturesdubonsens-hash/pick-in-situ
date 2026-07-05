@@ -330,6 +330,13 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   useEffect(() => { ancreModeRef.current = ancreMode; }, [ancreMode]);
   useEffect(() => { ancresRef.current = ancres; }, [ancres]);
 
+  // ── UI : accordéon (une catégorie ouverte à la fois) + sélection dalle/toit ──
+  const [openCat, setOpenCat] = useState<string | null>("murs");
+  const [dalleSel, setDalleSel] = useState<string | null>(null);
+  const [toitSel, setToitSel] = useState<string | null>(null);
+  // sélectionner un mur (clic 3D ou liste) ouvre la section Murs
+  useEffect(() => { if (murSel) setOpenCat("murs"); }, [murSel]);
+
   // ── Mesures (10 dernières) + mise à niveau ──
   const [mesures, setMesures] = useState<Mesure[]>([]);
   const [mesureMode, setMesureMode] = useState(false);
@@ -1394,14 +1401,30 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   const selOff = selected ? getOffset(selected) : null;
   const selScan = layers.find((s) => s.id === selected);
 
+  // Entête d'une section repliable (accordéon)
+  function sectionHeader(k: string, icon: string, label: string, count: number) {
+    const open = openCat === k;
+    return (
+      <button
+        onClick={() => setOpenCat(open ? null : k)}
+        className="w-full flex items-center gap-2 px-4 py-2.5 hover:bg-slate-50 transition-colors"
+      >
+        <span className="text-sm">{icon}</span>
+        <span className="flex-1 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">{label}</span>
+        <span className="text-[11px] font-mono text-slate-400 bg-slate-100 rounded px-1.5 py-0.5 min-w-[22px] text-center">{count}</span>
+        <span className={`text-slate-400 transition-transform ${open ? "rotate-90" : ""}`}>›</span>
+      </button>
+    );
+  }
+
   return (
     <div className="flex h-full" style={{ minHeight: 520 }}>
       {/* Sidebar */}
       <div className="w-64 shrink-0 border-r border-slate-200 bg-white flex flex-col overflow-y-auto">
-        <div className="p-4 border-b border-slate-100">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
-            Pièces — {layers.length}
-          </p>
+        <div className="border-b border-slate-100">
+          {sectionHeader("pieces", "🧩", "Pièces", layers.length)}
+          {openCat === "pieces" && (
+          <div className="px-4 pb-4">
           <div className="flex flex-col gap-1">
             {layers.map((s, i) => {
               const DOTS = ["🔵", "🟠", "🟢", "🟣", "🔴", "🔵"];
@@ -1438,14 +1461,16 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
               : { borderColor: "#e2e8f0", color: "#64748b" }}>
             {niveauMode ? (niveauDraft ? "Cliquez le 2e point…" : "Cliquez le 1er point…") : "⟂ Mettre à niveau"}
           </button>
+          </div>
+          )}
         </div>
 
         {/* Ancres */}
         {chantierId && (
-          <div className="p-4 border-b border-slate-100">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
-              📍 Ancres — {ancres.length}
-            </p>
+          <div className="border-b border-slate-100">
+            {sectionHeader("ancres", "📍", "Ancres", ancres.length)}
+            {openCat === "ancres" && (
+            <div className="px-4 pb-4">
             <button
               onClick={() => activerMode(ancreMode ? null : "ancre")}
               title="Cliquez des points caractéristiques du scan (coins, arêtes). Les murs s'y accrochent en priorité (rayon 30 cm)."
@@ -1472,14 +1497,16 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                 ))}
               </div>
             )}
+            </div>
+            )}
           </div>
         )}
 
         {/* Mesures */}
-        <div className="p-4 border-b border-slate-100">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
-            📏 Mesures — {mesures.length}
-          </p>
+        <div className="border-b border-slate-100">
+          {sectionHeader("mesures", "📏", "Mesures", mesures.length)}
+          {openCat === "mesures" && (
+          <div className="px-4 pb-4">
           <button
             onClick={() => activerMode(mesureMode ? null : "mesure")}
             className="w-full py-1.5 rounded-lg text-xs font-medium border transition-colors"
@@ -1507,14 +1534,16 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
               </button>
             </div>
           )}
+          </div>
+          )}
         </div>
 
         {/* Murs BIM */}
         {chantierId && (
-          <div className="p-4 border-b border-slate-100">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
-              🧱 Murs — {murs.length}
-            </p>
+          <div className="border-b border-slate-100">
+            {sectionHeader("murs", "🧱", "Murs", murs.length)}
+            {openCat === "murs" && (
+            <div className="px-4 pb-4">
             {/* Niveau 0 : altitude de la base des nouveaux murs */}
             <div className="flex items-center gap-1 mb-2 text-[11px] text-slate-500">
               <span>Niveau 0</span>
@@ -1570,7 +1599,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                 const len = Math.hypot(m.bx - m.ax, m.bz - m.az);
                 const sel = murSel === m.id;
                 return (
-                  <div key={m.id} onClick={() => setMurSel(m.id)}
+                  <div key={m.id} onClick={() => setMurSel(sel ? null : m.id)}
                     className="group border rounded-lg px-2 py-1.5 cursor-pointer transition-colors"
                     style={sel ? { borderColor: "#2563eb", background: "#eff6ff" } : { borderColor: "#f1f5f9" }}>
                     <div className="flex items-center gap-2 text-xs text-slate-600">
@@ -1585,6 +1614,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                         className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
                         title="Supprimer">🗑</button>
                     </div>
+                    {sel && (<>
                     <div className="flex items-center gap-1 mt-1">
                       <span className="text-[10px] text-slate-400">ép.</span>
                       <input type="number" min={0.05} max={1} step={0.01} value={m.epaisseur}
@@ -1631,19 +1661,22 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                         </div>
                       </div>
                     ))}
+                    </>)}
                   </div>
                 );
               })}
             </div>
+            </div>
+            )}
           </div>
         )}
 
         {/* Dalles */}
         {chantierId && (
-          <div className="p-4 border-b border-slate-100">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
-              ⬜ Dalles — {dalles.length}
-            </p>
+          <div className="border-b border-slate-100">
+            {sectionHeader("dalles", "⬜", "Dalles", dalles.length)}
+            {openCat === "dalles" && (
+            <div className="px-4 pb-4">
             <button
               onClick={() => activerMode(dalleMode ? null : "dalle")}
               title="Cliquez les sommets du polygone au sol — fermez en recliquant le 1er point (ou Entrée). Niveau fini = Niveau 0 des murs."
@@ -1654,15 +1687,20 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
               {dalleMode ? `Sommet ${dalleDraft.length + 1}… (Entrée : fermer)` : "＋ Tracer une dalle"}
             </button>
             <div className="flex flex-col gap-1.5">
-              {dalles.map((d, i) => (
-                <div key={d.id} className="group border border-slate-100 rounded-lg px-2 py-1.5">
+              {dalles.map((d, i) => {
+                const sel = dalleSel === d.id;
+                return (
+                <div key={d.id} onClick={() => setDalleSel(sel ? null : d.id)}
+                  className="group border rounded-lg px-2 py-1.5 cursor-pointer transition-colors"
+                  style={sel ? { borderColor: "#2563eb", background: "#eff6ff" } : { borderColor: "#f1f5f9" }}>
                   <div className="flex items-center gap-2 text-xs text-slate-600">
                     <span className="font-medium">Dalle {i + 1}</span>
                     <span className="font-mono text-slate-400">{aireDalle(d.points).toFixed(1)} m²</span>
-                    <button onClick={() => supprimerDalle(d.id)}
+                    <button onClick={(e) => { e.stopPropagation(); supprimerDalle(d.id); }}
                       className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
                       title="Supprimer">🗑</button>
                   </div>
+                  {sel && (
                   <div className="flex items-center gap-1 mt-1">
                     <span className="text-[10px] text-slate-400">ép.</span>
                     <input type="number" min={0.05} max={1} step={0.01} value={d.epaisseur}
@@ -1674,18 +1712,22 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                       className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
                     <span className="text-[10px] text-slate-400">m</span>
                   </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
+            </div>
+            )}
           </div>
         )}
 
         {/* Toits */}
         {chantierId && (
-          <div className="p-4 border-b border-slate-100">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
-              🏠 Toits — {toits.length}
-            </p>
+          <div className="border-b border-slate-100">
+            {sectionHeader("toits", "🏠", "Toits", toits.length)}
+            {openCat === "toits" && (
+            <div className="px-4 pb-4">
             <button
               onClick={() => activerMode(toitMode ? null : "toit")}
               title="3 clics sur le scan : les 2 extrémités de l'égout, puis un point du faîtage — le pan s'aligne sur la pente"
@@ -1704,15 +1746,19 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                 const pente = sv.length() > 0.01
                   ? Math.round(Math.atan2(Math.abs(t.p3[1] - (t.p1[1] + t.p2[1]) / 2), Math.hypot(sv.x, sv.z)) * 180 / Math.PI)
                   : 0;
+                const sel = toitSel === t.id;
                 return (
-                  <div key={t.id} className="group border border-slate-100 rounded-lg px-2 py-1.5">
+                  <div key={t.id} onClick={() => setToitSel(sel ? null : t.id)}
+                    className="group border rounded-lg px-2 py-1.5 cursor-pointer transition-colors"
+                    style={sel ? { borderColor: "#2563eb", background: "#eff6ff" } : { borderColor: "#f1f5f9" }}>
                     <div className="flex items-center gap-2 text-xs text-slate-600">
                       <span className="font-medium">Pan {i + 1}</span>
                       <span className="font-mono text-slate-400">{aire.toFixed(1)} m² · {pente}°</span>
-                      <button onClick={() => supprimerToit(t.id)}
+                      <button onClick={(e) => { e.stopPropagation(); supprimerToit(t.id); }}
                         className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
                         title="Supprimer">🗑</button>
                     </div>
+                    {sel && (
                     <div className="flex items-center gap-1 mt-1">
                       <span className="text-[10px] text-slate-400">ép.</span>
                       <input type="number" min={0.05} max={1} step={0.01} value={t.epaisseur}
@@ -1720,10 +1766,13 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                         className="w-14 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
                       <span className="text-[10px] text-slate-400">m</span>
                     </div>
+                    )}
                   </div>
                 );
               })}
             </div>
+            </div>
+            )}
           </div>
         )}
 
