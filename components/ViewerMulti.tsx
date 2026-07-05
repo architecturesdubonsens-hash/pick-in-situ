@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { supabase, db } from "@/lib/supabase";
+import { buildBimIFC, buildBimPlanDXF } from "@/lib/bim-export";
 
 export interface ScanLayer {
   id: string;
@@ -1531,6 +1532,28 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offsets]);
 
+  // Export de la maquette BIM (IFC4 / DXF plan)
+  function telecharger(nom: string, contenu: string, mime: string) {
+    const blob = new Blob([contenu], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = nom;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  function modeleBim() {
+    return { murs, ouvertures, dalles, toits };
+  }
+  const bimVide = murs.length + dalles.length + toits.length === 0;
+  const nomFichier = (chantierNom || "releve").replace(/[^\w\-]+/g, "_");
+  function exporterIFC() {
+    telecharger(`${nomFichier}.ifc`, buildBimIFC(modeleBim(), chantierNom || "Relevé"), "application/x-step");
+  }
+  function exporterDXF() {
+    telecharger(`${nomFichier}_plan.dxf`, buildBimPlanDXF(modeleBim()), "application/dxf");
+  }
+
   // Blocage de l'inclinaison verticale de la vue (garde l'angle de site courant)
   const [vertLock, setVertLock] = useState(false);
   function toggleVertLock() {
@@ -1988,6 +2011,34 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
             >
               Remettre à zéro
             </button>
+          </div>
+        )}
+
+        {/* Export de la maquette BIM */}
+        {chantierId && (
+          <div className="p-4 border-t border-slate-100">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+              ⬇ Export maquette
+            </p>
+            <div className="flex gap-1">
+              <button
+                onClick={exporterIFC}
+                disabled={bimVide}
+                title="Exporter la maquette (murs, ouvertures, dalles, toitures) au format IFC4 — ouvrable dans ArchiCAD, Revit, BIMcollab…"
+                className="flex-1 py-1.5 rounded-lg text-xs font-medium border transition-colors disabled:opacity-40"
+                style={{ borderColor: "#e2e8f0", color: "#334155" }}>
+                IFC
+              </button>
+              <button
+                onClick={exporterDXF}
+                disabled={bimVide}
+                title="Exporter le plan (empreintes murs/dalles/toits, baies) au format DXF"
+                className="flex-1 py-1.5 rounded-lg text-xs font-medium border transition-colors disabled:opacity-40"
+                style={{ borderColor: "#e2e8f0", color: "#334155" }}>
+                DXF plan
+              </button>
+            </div>
+            {bimVide && <p className="text-[10px] text-slate-400 mt-1">Tracez des murs pour activer l&apos;export.</p>}
           </div>
         )}
 
