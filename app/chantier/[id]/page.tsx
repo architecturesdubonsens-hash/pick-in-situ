@@ -52,6 +52,8 @@ export default function ChantierPage({ params }: { params: Promise<{ id: string 
     offsetY: s.offset_y,
     offsetZ: s.offset_z ?? 0,
     angle: s.offset_angle,
+    tiltX: s.tilt_x ?? 0,
+    tiltZ: s.tilt_z ?? 0,
   }));
 
   return (

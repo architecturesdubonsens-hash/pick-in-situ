@@ -13,7 +13,9 @@ export interface ScanLayer {
   offsetX: number;
   offsetY: number;
   offsetZ: number;
-  angle: number;  // degrés
+  angle: number;   // degrés (lacet)
+  tiltX?: number;  // radians — mise à niveau (assiette)
+  tiltZ?: number;
 }
 
 interface Props {
@@ -28,6 +30,34 @@ interface ScanOffset {
   y: number;
   z: number;
   angle: number;
+  tx: number; // assiette (radians, axes monde X et Z)
+  tz: number;
+}
+
+// ── Outil Mesure ──────────────────────────────────────────────────────────────
+interface Mesure {
+  id: string;
+  ax: number; ay: number; az: number;
+  bx: number; by: number; bz: number;
+  d: number;
+}
+
+function etiquetteMesure(text: string) {
+  const c = document.createElement("canvas");
+  c.width = 256; c.height = 80;
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "rgba(37, 99, 235, 0.9)";
+  ctx.fillRect(4, 8, 248, 64);
+  ctx.font = "bold 40px system-ui, sans-serif";
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, 128, 41);
+  const tex = new THREE.CanvasTexture(c);
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+  spr.scale.set(0.75, 0.24, 1);
+  spr.renderOrder = 4;
+  return spr;
 }
 
 // ── Outil Mur (scan-to-BIM) ───────────────────────────────────────────────────
@@ -87,6 +117,25 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   const pipetteRef = useRef(false);
   const murPendingRef = useRef<{ a: THREE.Vector3; b: THREE.Vector3 } | null>(null);
   const pendingMeshRef = useRef<THREE.Mesh | null>(null);
+
+  // ── Mesures (10 dernières) + mise à niveau ──
+  const [mesures, setMesures] = useState<Mesure[]>([]);
+  const [mesureMode, setMesureMode] = useState(false);
+  const [mesureDraft, setMesureDraft] = useState<THREE.Vector3 | null>(null);
+  const [niveauMode, setNiveauMode] = useState(false);
+  const [niveauDraft, setNiveauDraft] = useState<{ p: THREE.Vector3; scanId: string } | null>(null);
+  const mesureModeRef = useRef(false);
+  const mesureDraftRef = useRef<THREE.Vector3 | null>(null);
+  const niveauModeRef = useRef(false);
+  const niveauDraftRef = useRef<{ p: THREE.Vector3; scanId: string } | null>(null);
+  const mesureMarkerRef = useRef<THREE.Mesh | null>(null);
+  const niveauMarkerRef = useRef<THREE.Mesh | null>(null);
+  const mesureGroupMapRef = useRef<Map<string, THREE.Group>>(new Map());
+  useEffect(() => { mesureModeRef.current = mesureMode; }, [mesureMode]);
+  useEffect(() => { mesureDraftRef.current = mesureDraft; }, [mesureDraft]);
+  useEffect(() => { niveauModeRef.current = niveauMode; }, [niveauMode]);
+  useEffect(() => { niveauDraftRef.current = niveauDraft; }, [niveauDraft]);
+
   useEffect(() => { murModeRef.current = murMode; }, [murMode]);
   useEffect(() => { murDraftRef.current = murDraft; }, [murDraft]);
   useEffect(() => { mursRef.current = murs; }, [murs]);
@@ -97,8 +146,11 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   useEffect(() => { murPendingRef.current = murPending; }, [murPending]);
 
   const [offsets, setOffsets] = useState<ScanOffset[]>(
-    scans.map((s) => ({ id: s.id, x: s.offsetX, y: s.offsetY, z: s.offsetZ ?? 0, angle: s.angle }))
+    scans.map((s) => ({ id: s.id, x: s.offsetX, y: s.offsetY, z: s.offsetZ ?? 0,
+                        angle: s.angle, tx: s.tiltX ?? 0, tz: s.tiltZ ?? 0 }))
   );
+  const offsetsRef = useRef<ScanOffset[]>([]);
+  useEffect(() => { offsetsRef.current = offsets; }, [offsets]);
   // Copie locale : permet de retirer une pièce supprimée sans recharger la page
   const [layers, setLayers] = useState<ScanLayer[]>(scans);
   const [selected, setSelected] = useState<string | null>(scans[0]?.id ?? null);
@@ -129,18 +181,21 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   }
 
   const getOffset = useCallback(
-    (id: string) => offsets.find((o) => o.id === id) ?? { id, x: 0, y: 0, z: 0, angle: 0 },
+    (id: string) => offsets.find((o) => o.id === id) ?? { id, x: 0, y: 0, z: 0, angle: 0, tx: 0, tz: 0 },
     [offsets]
   );
 
-  // Applique l'offset 3D à un mesh chargé
+  // Applique l'offset 3D à un mesh chargé : position + lacet, puis assiette
+  // (mise à niveau) appliquée dans le repère monde
   function applyOffset(group: THREE.Group, off: ScanOffset) {
     group.position.set(off.x, off.z, off.y);
-    group.rotation.y = (off.angle * Math.PI) / 180;
+    const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), (off.angle * Math.PI) / 180);
+    const qt = new THREE.Quaternion().setFromEuler(new THREE.Euler(off.tx ?? 0, 0, off.tz ?? 0));
+    group.quaternion.copy(qt).multiply(qy);
   }
 
   // Met à jour offset state + mesh 3D
-  function updateOffset(id: string, key: "x" | "y" | "z" | "angle", val: number) {
+  function updateOffset(id: string, key: "x" | "y" | "z" | "angle" | "tx" | "tz", val: number) {
     setOffsets((prev) => {
       const next = prev.map((o) => (o.id === id ? { ...o, [key]: val } : o));
       const updated = next.find((o) => o.id === id)!;
@@ -226,6 +281,107 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     return p;
   }
 
+  // ── Outils Mesure + Mise à niveau ──
+
+  function creerMarqueur(p: THREE.Vector3, color: number, r = 0.05) {
+    const scene = sceneRef.current;
+    if (!scene) return null;
+    const m = new THREE.Mesh(
+      new THREE.SphereGeometry(r, 16, 16),
+      new THREE.MeshBasicMaterial({ color, depthTest: false })
+    );
+    m.renderOrder = 3;
+    m.position.copy(p);
+    scene.add(m);
+    return m;
+  }
+
+  function retirerMarqueurRef(ref: { current: THREE.Mesh | null }) {
+    if (ref.current && sceneRef.current) {
+      sceneRef.current.remove(ref.current);
+      ref.current.geometry.dispose();
+      ref.current = null;
+    }
+  }
+
+  function annulerMesureDraft() {
+    setMesureDraft(null);
+    retirerMarqueurRef(mesureMarkerRef);
+  }
+
+  function annulerNiveauDraft() {
+    setNiveauDraft(null);
+    retirerMarqueurRef(niveauMarkerRef);
+  }
+
+  function poserPointMesure(p: THREE.Vector3) {
+    const draft = mesureDraftRef.current;
+    if (!draft) {
+      setMesureDraft(p);
+      mesureMarkerRef.current = creerMarqueur(p, 0x2563eb, 0.035);
+      return;
+    }
+    const d = draft.distanceTo(p);
+    if (d > 0.01) {
+      const m: Mesure = { id: crypto.randomUUID(),
+        ax: draft.x, ay: draft.y, az: draft.z, bx: p.x, by: p.y, bz: p.z, d };
+      setMesures((prev) => [...prev, m].slice(-10));
+    }
+    annulerMesureDraft();
+    // le mode reste actif : on peut enchaîner les mesures (Échap pour sortir)
+  }
+
+  // Retrouve la pièce (scan) à laquelle appartient l'objet touché par le raycast
+  function scanIdFromObject(obj: THREE.Object3D): string | null {
+    for (const [id, g] of meshMapRef.current) {
+      let o: THREE.Object3D | null = obj;
+      while (o) { if (o === g) return id; o = o.parent; }
+    }
+    return null;
+  }
+
+  // Mise à niveau : les 2 points cliqués sont censés être à la même altitude →
+  // rotation du scan (autour du milieu du segment) qui rend le segment horizontal
+  function appliquerNiveau(scanId: string, p1: THREE.Vector3, p2: THREE.Vector3) {
+    const d = new THREE.Vector3().subVectors(p2, p1);
+    if (Math.hypot(d.x, d.z) < 0.2) {
+      alert("Segment trop court ou trop vertical pour caler le niveau — cliquez 2 points éloignés d'une même ligne horizontale.");
+      return;
+    }
+    const off = offsetsRef.current.find((o) => o.id === scanId);
+    if (!off) return;
+    const dh = new THREE.Vector3(d.x, 0, d.z).normalize();
+    const qd = new THREE.Quaternion().setFromUnitVectors(d.clone().normalize(), dh);
+    // pivot : milieu du segment cliqué (il ne bouge pas)
+    const c = p1.clone().add(p2).multiplyScalar(0.5);
+    const P = new THREE.Vector3(off.x, off.z, off.y);
+    const Pn = c.clone().add(P.clone().sub(c).applyQuaternion(qd));
+    // nouvelle assiette = correction ∘ assiette courante (le lacet ne change pas)
+    const qt = new THREE.Quaternion().setFromEuler(new THREE.Euler(off.tx ?? 0, 0, off.tz ?? 0));
+    const e = new THREE.Euler().setFromQuaternion(qd.multiply(qt), "XYZ");
+    setOffsets((prev) => {
+      const next = prev.map((o) => o.id === scanId
+        ? { ...o, x: Pn.x, y: Pn.z, z: Pn.y, tx: e.x, tz: e.z }
+        : o);
+      const g = meshMapRef.current.get(scanId);
+      const u = next.find((o) => o.id === scanId);
+      if (g && u) applyOffset(g, u);
+      return next;
+    });
+    setSaved(false);
+  }
+
+  // Un seul outil actif à la fois
+  function activerMode(mode: "mur" | "mesure" | "niveau" | "pipette" | null) {
+    annulerDraft();
+    annulerMesureDraft();
+    annulerNiveauDraft();
+    setMurMode(mode === "mur");
+    setMesureMode(mode === "mesure");
+    setNiveauMode(mode === "niveau");
+    setPipette(mode === "pipette");
+  }
+
   function poserPointMur(p: THREE.Vector3) {
     const scene = sceneRef.current;
     const pending = murPendingRef.current;
@@ -291,9 +447,53 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     }
   }
 
+  // Synchronise les visuels de mesures (2 sphères + ligne + étiquette) avec l'état
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const vivantes = new Set(mesures.map((m) => m.id));
+    for (const [id, g] of mesureGroupMapRef.current) {
+      if (!vivantes.has(id)) {
+        scene.remove(g);
+        g.traverse((o) => {
+          const mesh = o as THREE.Mesh;
+          if (mesh.geometry) mesh.geometry.dispose();
+        });
+        mesureGroupMapRef.current.delete(id);
+      }
+    }
+    for (const m of mesures) {
+      if (mesureGroupMapRef.current.has(m.id)) continue;
+      const g = new THREE.Group();
+      const a = new THREE.Vector3(m.ax, m.ay, m.az);
+      const b = new THREE.Vector3(m.bx, m.by, m.bz);
+      for (const p of [a, b]) {
+        const s = new THREE.Mesh(
+          new THREE.SphereGeometry(0.03, 12, 12),
+          new THREE.MeshBasicMaterial({ color: 0x2563eb, depthTest: false })
+        );
+        s.renderOrder = 3;
+        s.position.copy(p);
+        g.add(s);
+      }
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([a, b]),
+        new THREE.LineBasicMaterial({ color: 0x2563eb, depthTest: false })
+      );
+      line.renderOrder = 3;
+      g.add(line);
+      const lbl = etiquetteMesure(`${m.d.toFixed(2)} m`);
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+      lbl.position.set(mid.x, mid.y + 0.12, mid.z);
+      g.add(lbl);
+      scene.add(g);
+      mesureGroupMapRef.current.set(m.id, g);
+    }
+  }, [mesures]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { annulerDraft(); setMurMode(false); setPipette(false); setMurSel(null); }
+      if (e.key === "Escape") { activerMode(null); setMurSel(null); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -354,8 +554,9 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
 
     const onDown = (e: PointerEvent) => {
       downPos = { x: e.clientX, y: e.clientY };
-      // Déplacement : le drag démarre sur le mur sélectionné (hors mode tracé/pipette)
-      if (murModeRef.current || pipetteRef.current || e.button !== 0) return;
+      // Déplacement : le drag démarre sur le mur sélectionné (hors modes outils)
+      if (murModeRef.current || pipetteRef.current || mesureModeRef.current
+          || niveauModeRef.current || e.button !== 0) return;
       const selId = murSelRef.current;
       if (!selId) return;
       const mesh = murMeshMapRef.current.get(selId);
@@ -421,6 +622,30 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         const hit = ray.intersectObjects(cibles, true)[0];
         if (hit) setMurBaseY(Math.round(snapPick(hit).y * 100) / 100);
         setPipette(false);
+        return;
+      }
+      // Mesure : 2 clics accrochés → distance (l'outil reste actif)
+      if (mesureModeRef.current) {
+        const hit = ray.intersectObjects(cibles, true)[0];
+        if (hit) poserPointMesure(snapPick(hit));
+        return;
+      }
+      // Mise à niveau : 2 clics sur une ligne censée être horizontale
+      if (niveauModeRef.current) {
+        const hit = ray.intersectObjects(cibles, true)[0];
+        if (!hit) return;
+        const p = snapPick(hit);
+        const nd = niveauDraftRef.current;
+        if (!nd) {
+          const sid = scanIdFromObject(hit.object);
+          if (!sid) return;
+          setNiveauDraft({ p, scanId: sid });
+          niveauMarkerRef.current = creerMarqueur(p, 0x10b981);
+        } else {
+          appliquerNiveau(nd.scanId, nd.p, p);
+          annulerNiveauDraft();
+          setNiveauMode(false);
+        }
         return;
       }
       if (murModeRef.current) {
@@ -532,6 +757,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       rendererRef.current = null;
       meshMapRef.current.clear();
       murMeshMapRef.current.clear();
+      mesureGroupMapRef.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -543,7 +769,8 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       offsets.map((o) =>
         db
           .from("scans")
-          .update({ offset_x: o.x, offset_y: o.y, offset_z: o.z, offset_angle: o.angle })
+          .update({ offset_x: o.x, offset_y: o.y, offset_z: o.z, offset_angle: o.angle,
+                    tilt_x: o.tx, tilt_z: o.tz })
           .eq("id", o.id)
       )
     );
@@ -589,6 +816,49 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
               );
             })}
           </div>
+          <button
+            onClick={() => activerMode(niveauMode ? null : "niveau")}
+            title="Le scan photogrammétrique peut être légèrement penché : cliquez 2 points qui devraient être à la même altitude (assise de briques, gouttière…) — le scan pivote pour les mettre de niveau"
+            className="w-full mt-2 py-1.5 rounded-lg text-xs font-medium border transition-colors"
+            style={niveauMode
+              ? { background: "#10b981", color: "white", borderColor: "#10b981" }
+              : { borderColor: "#e2e8f0", color: "#64748b" }}>
+            {niveauMode ? (niveauDraft ? "Cliquez le 2e point…" : "Cliquez le 1er point…") : "⟂ Mettre à niveau"}
+          </button>
+        </div>
+
+        {/* Mesures */}
+        <div className="p-4 border-b border-slate-100">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+            📏 Mesures — {mesures.length}
+          </p>
+          <button
+            onClick={() => activerMode(mesureMode ? null : "mesure")}
+            className="w-full py-1.5 rounded-lg text-xs font-medium border transition-colors"
+            style={mesureMode
+              ? { background: "#2563eb", color: "white", borderColor: "#2563eb" }
+              : { borderColor: "#e2e8f0", color: "#64748b" }}>
+            {mesureMode ? (mesureDraft ? "Cliquez le 2e point…" : "Cliquez le 1er point…") : "＋ Mesurer"}
+          </button>
+          {mesures.length > 0 && (
+            <div className="flex flex-col gap-1 mt-2">
+              {mesures.map((m, i) => (
+                <div key={m.id}
+                  className="group flex items-center gap-2 text-xs text-slate-600 border border-slate-100 rounded px-2 py-1">
+                  <span className="text-slate-400">{i + 1}.</span>
+                  <span className="font-mono">{m.d.toFixed(2)} m</span>
+                  <button
+                    onClick={() => setMesures((prev) => prev.filter((x) => x.id !== m.id))}
+                    className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
+                    title="Supprimer cette mesure">🗑</button>
+                </div>
+              ))}
+              <button onClick={() => setMesures([])}
+                className="text-[10px] text-slate-400 hover:text-slate-600 underline self-start mt-1">
+                Tout effacer
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Murs BIM */}
@@ -604,7 +874,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                 onChange={(e) => { const v = parseFloat(e.target.value); if (!isNaN(v)) setMurBaseY(v); }}
                 className="w-16 border border-slate-200 rounded px-1 py-0.5 text-[11px] font-mono"/>
               <span>m</span>
-              <button onClick={() => setPipette(!pipette)}
+              <button onClick={() => activerMode(pipette ? null : "pipette")}
                 title="Cliquer un point du scan (sol fini) pour caler le niveau 0"
                 className="ml-auto px-1.5 py-0.5 rounded border text-[11px] transition-colors"
                 style={pipette
@@ -627,7 +897,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
               ))}
             </div>
             <button
-              onClick={() => { if (murMode) { annulerDraft(); setMurMode(false); } else setMurMode(true); }}
+              onClick={() => activerMode(murMode ? null : "mur")}
               className="w-full py-1.5 rounded-lg text-xs font-medium border transition-colors mb-2"
               style={murMode
                 ? { background: "#f97316", color: "white", borderColor: "#f97316" }
@@ -722,7 +992,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
             })}
 
             <button
-              onClick={() => { updateOffset(selOff.id, "x", 0); updateOffset(selOff.id, "y", 0); updateOffset(selOff.id, "z", 0); updateOffset(selOff.id, "angle", 0); }}
+              onClick={() => { (["x", "y", "z", "angle", "tx", "tz"] as const).forEach((k) => updateOffset(selOff.id, k, 0)); }}
               className="text-xs text-slate-400 hover:text-slate-600 underline mt-auto"
             >
               Remettre à zéro
@@ -770,7 +1040,21 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
             🎯 Cliquez un point du scan (sol fini) pour caler le niveau 0
           </div>
         )}
-        {!murMode && !pipette && murSel && (
+        {mesureMode && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
+            {mesureDraft
+              ? "📏 Cliquez le 2e point (Échap : annuler)"
+              : "📏 Cliquez le 1er point de la mesure — accrochage sommets, Échap pour sortir"}
+          </div>
+        )}
+        {niveauMode && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
+            {niveauDraft
+              ? "⟂ Cliquez le 2e point de la même ligne horizontale (Échap : annuler)"
+              : "⟂ Cliquez 2 points qui devraient être à la même altitude (assise, gouttière, faîtage…)"}
+          </div>
+        )}
+        {!murMode && !pipette && !mesureMode && !niveauMode && murSel && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
             ↔ Glissez le mur bleu pour le déplacer · Échap ou clic dans le vide pour désélectionner
           </div>

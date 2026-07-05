@@ -54,6 +54,8 @@ interface ScanAssemblyOffset {
   y: number;
   z: number;
   angle: number;
+  tx: number; // assiette (radians) — mise à niveau faite dans la vue 3D
+  tz: number;
 }
 
 // ── Vues orthographiques ──────────────────────────────────────────────────────
@@ -814,7 +816,11 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
             loader.load(url, res, undefined, rej)
           );
           gltf.scene.position.set(scan.offsetX, scan.offsetZ ?? 0, scan.offsetY);
-          gltf.scene.rotation.y = (scan.angle * Math.PI) / 180;
+          {
+            const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), (scan.angle * Math.PI) / 180);
+            const qt = new THREE.Quaternion().setFromEuler(new THREE.Euler(scan.tiltX ?? 0, 0, scan.tiltZ ?? 0));
+            gltf.scene.quaternion.copy(qt).multiply(qy);
+          }
           gltf.scene.updateMatrixWorld(true);
           // Matériaux non-éclairés pour le rendu ortho-texturé (pas de lumières
           // dans la scène de rendu ; la texture photo porte déjà l'éclairage réel)
@@ -832,7 +838,8 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
           allEdge.push(...extractEdgeSegments(gltf.scene));
           combined.union(new THREE.Box3().setFromObject(gltf.scene));
           entries.push({ scene: gltf.scene, scanId: scan.id, nom: scan.nom, color: SCAN_COLORS[i % SCAN_COLORS.length] });
-          initOffsets.push({ id: scan.id, nom: scan.nom, x: scan.offsetX, y: scan.offsetY, z: scan.offsetZ ?? 0, angle: scan.angle });
+          initOffsets.push({ id: scan.id, nom: scan.nom, x: scan.offsetX, y: scan.offsetY, z: scan.offsetZ ?? 0,
+                             angle: scan.angle, tx: scan.tiltX ?? 0, tz: scan.tiltZ ?? 0 });
         } catch { console.warn("Échec chargement", scan.nom); }
       }
 
@@ -894,7 +901,9 @@ export default function PlanExtractor({ scans, chantierNom }: Props) {
 
   function applyOffsetToScene(entry: SceneEntry, offset: ScanAssemblyOffset) {
     entry.scene.position.set(offset.x, offset.z, offset.y);
-    entry.scene.rotation.y = (offset.angle * Math.PI) / 180;
+    const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), (offset.angle * Math.PI) / 180);
+    const qt = new THREE.Quaternion().setFromEuler(new THREE.Euler(offset.tx ?? 0, 0, offset.tz ?? 0));
+    entry.scene.quaternion.copy(qt).multiply(qy);
     entry.scene.updateMatrixWorld(true);
   }
 

@@ -35,6 +35,8 @@ export interface Scan {
   offset_y: number;
   offset_z: number;
   offset_angle: number;
+  tilt_x: number;
+  tilt_z: number;
   captured_at: string;
 }
 
