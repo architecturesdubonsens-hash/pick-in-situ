@@ -422,6 +422,20 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   const ancreModeRef = useRef(false);
   const ancresRef = useRef<Ancre[]>([]);
   const ancreMeshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
+  const [ancreSel, setAncreSel] = useState<string | null>(null);
+  // ── Palette contextuelle (pet palette façon ArchiCAD) ──
+  // Clic simple (sans glisser) sur une poignée d'extrémité ou le corps d'un mur
+  // sélectionné → mini-fenêtre d'outils près du curseur. Certains outils « arment »
+  // une contrainte pour le prochain drag (dans l'axe, perpendiculaire).
+  const [palette, setPalette] = useState<{
+    kind: "node" | "edge"; murId: string; end?: "a" | "b";
+    sx: number; sy: number; wp: { x: number; y: number; z: number };
+  } | null>(null);
+  const [armedOp, setArmedOp] = useState<"axe" | "perp" | null>(null);
+  const armedOpRef = useRef<"axe" | "perp" | null>(null);
+  useEffect(() => { armedOpRef.current = armedOp; }, [armedOp]);
+  // Repère visuel d'accrochage (losange coloré par type de cible)
+  const snapMarkerRef = useRef<THREE.Mesh | null>(null);
   const handleMeshesRef = useRef<THREE.Mesh[]>([]);
   const murRefLineRef = useRef<THREE.Line | null>(null);
   const [ouvSel, setOuvSel] = useState<string | null>(null);
@@ -436,6 +450,9 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   const [dalleSel, setDalleSel] = useState<string | null>(null);
   const [toitSel, setToitSel] = useState<string | null>(null);
   const [panelPos, setPanelPos] = useState({ x: 300, y: 96 });
+  // Transparence du scan : rend le mesh photogrammétrique translucide pour
+  // atteindre les poignées d'édition (murs/toits/ouvertures) masquées par l'objet.
+  const [scanOpacity, setScanOpacity] = useState(1);
   // sélectionner un mur (clic 3D ou liste) ouvre la section Murs
   useEffect(() => { if (murSel) setOpenCat("murs"); }, [murSel]);
 
@@ -485,6 +502,30 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   const [saved, setSaved] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set(scans.map((s) => s.id)));
+
+  // Applique la transparence courante à tous les meshes de scan. Re-tourne quand
+  // un scan finit de charger (loadingIds) pour couvrir les meshes ajoutés après coup.
+  useEffect(() => {
+    const apply = (mat: THREE.Material) => {
+      const m = mat as THREE.Material & { opacity: number; transparent: boolean; depthWrite: boolean };
+      const base = (m.userData.baseOpacity as number | undefined) ?? m.opacity;
+      m.userData.baseOpacity = base;
+      m.opacity = base * scanOpacity;
+      m.transparent = m.opacity < 0.999;
+      // Translucide → ne pas écrire la profondeur : les poignées et la maquette BIM
+      // situées derrière le mesh redeviennent visibles et cliquables.
+      m.depthWrite = scanOpacity >= 0.999;
+      m.needsUpdate = true;
+    };
+    for (const g of meshMapRef.current.values()) {
+      g.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        if (Array.isArray(mesh.material)) mesh.material.forEach(apply);
+        else apply(mesh.material);
+      });
+    }
+  }, [scanOpacity, loadingIds]);
 
   // Supprime un scan : ligne en base + fichier mesh du storage + retrait de la scène
   async function supprimerScan(s: ScanLayer) {
@@ -619,7 +660,8 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     }
   }, [toits]);
 
-  // Marqueurs d'ancres (octaèdres magenta, toujours visibles)
+  // Marqueurs d'ancres (octaèdres magenta, toujours visibles). L'ancre sélectionnée
+  // passe en cyan et grossit pour signaler qu'elle est saisissable/déplaçable.
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
@@ -638,9 +680,13 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         ancreMeshMapRef.current.set(a.id, mesh);
         scene.add(mesh);
       }
+      mesh.userData = { ancreId: a.id };
       mesh.position.set(a.x, a.y, a.z);
+      const sel = a.id === ancreSel;
+      (mesh.material as THREE.MeshBasicMaterial).color.setHex(sel ? 0x06b6d4 : 0xd946ef);
+      mesh.scale.setScalar(sel ? 1.6 : 1);
     }
-  }, [ancres]);
+  }, [ancres, ancreSel]);
 
   // Poignées d'édition du mur sélectionné, façon ArchiCAD : ligne de référence au
   // pied (bleue), poignées d'extrémité jaunes, poignée de hauteur verte au sommet.
@@ -656,9 +702,15 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     }
     const m = murs.find((x) => x.id === murSel);
     if (!m) return;
-    // Ligne de référence : la ligne dessinée (axe/nu), au niveau de la base
-    const A = new THREE.Vector3(m.ax, m.base_y, m.az);
-    const B = new THREE.Vector3(m.bx, m.base_y, m.bz);
+    // Ligne de référence + poignées recentrées sur l'AXE DU CORPS du mur : si le mur
+    // est tracé sur un nu (decalage ±0.5), la ligne brute tombe sur la face opposée
+    // à celle qu'on regarde → on ajoute la normale × décalage pour coller au volume.
+    const _dx = m.bx - m.ax, _dz = m.bz - m.az;
+    const _len = Math.max(0.05, Math.hypot(_dx, _dz));
+    const _off = (m.decalage ?? 0) * m.epaisseur;
+    const _ox = (-_dz / _len) * _off, _oz = (_dx / _len) * _off;
+    const A = new THREE.Vector3(m.ax + _ox, m.base_y, m.az + _oz);
+    const B = new THREE.Vector3(m.bx + _ox, m.base_y, m.bz + _oz);
     const refLine = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints([A, B]),
       new THREE.LineBasicMaterial({ color: 0x2563eb, depthTest: false })
@@ -685,7 +737,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     );
     hh.renderOrder = 5;
     hh.userData = { handleKind: "h", murId: m.id };
-    hh.position.set((m.ax + m.bx) / 2, m.base_y + m.hauteur, (m.az + m.bz) / 2);
+    hh.position.set((m.ax + m.bx) / 2 + _ox, m.base_y + m.hauteur, (m.az + m.bz) / 2 + _oz);
     scene.add(hh);
     handleMeshesRef.current.push(hh);
   }, [murSel, murs]);
@@ -745,6 +797,52 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     setMurs((prev) => prev.filter((m) => m.id !== id));
     setOuvertures((prev) => prev.filter((o) => o.mur_id !== id));
     setMurSel((s) => (s === id ? null : s));
+  }
+
+  // Divise un mur au point (px,pz) projeté sur son axe → deux murs A→P et P→B ;
+  // les ouvertures suivent le tronçon où elles se trouvent (pos recalée sur le 2e).
+  async function diviserMur(m: Mur, px: number, pz: number) {
+    if (!chantierId) return;
+    const dx = m.bx - m.ax, dz = m.bz - m.az;
+    const l2 = dx * dx + dz * dz;
+    if (l2 < 1e-4) return;
+    let t = ((px - m.ax) * dx + (pz - m.az) * dz) / l2;
+    t = Math.min(0.95, Math.max(0.05, t));
+    const cx = m.ax + t * dx, cz = m.az + t * dz;
+    const cut = t * Math.sqrt(l2);
+    const base = { chantier_id: chantierId, epaisseur: m.epaisseur, hauteur: m.hauteur,
+                   base_y: m.base_y, decalage: m.decalage };
+    const { data: m1, error: e1 } = await db.from("bim_murs")
+      .insert({ ...base, ax: m.ax, az: m.az, bx: cx, bz: cz }).select("*").single();
+    const { data: m2, error: e2 } = await db.from("bim_murs")
+      .insert({ ...base, ax: cx, az: cz, bx: m.bx, bz: m.bz }).select("*").single();
+    if (e1 || e2 || !m1 || !m2) { alert(`Division impossible : ${(e1 ?? e2)?.message}`); return; }
+    const ouvs = ouverturesRef.current.filter((o) => o.mur_id === m.id);
+    for (const o of ouvs) {
+      if (o.pos <= cut) await db.from("bim_ouvertures").update({ mur_id: (m1 as Mur).id }).eq("id", o.id);
+      else await db.from("bim_ouvertures").update({ mur_id: (m2 as Mur).id, pos: o.pos - cut }).eq("id", o.id);
+    }
+    await db.from("bim_murs").delete().eq("id", m.id);
+    setMurs((prev) => [...prev.filter((x) => x.id !== m.id), m1 as Mur, m2 as Mur]);
+    setOuvertures((prev) => prev.map((o) => o.mur_id !== m.id ? o
+      : o.pos <= cut ? { ...o, mur_id: (m1 as Mur).id }
+      : { ...o, mur_id: (m2 as Mur).id, pos: o.pos - cut }));
+    setMurSel((m1 as Mur).id);
+    setOuvSel(null);
+  }
+
+  // Perce une ouverture centrée sur un point du mur (réutilise la logique du mode
+  // ouverture : clic = angle inférieur droit de la baie par défaut 1,00 × 1,15).
+  function ouvertureAuPoint(m: Mur, wp: { x: number; y: number; z: number }) {
+    const len = Math.hypot(m.bx - m.ax, m.bz - m.az);
+    const LARG = 1.0, HAUT = 1.15;
+    if (len < LARG + 0.06) { alert("Mur trop court pour une ouverture d'1 m."); return; }
+    const along = ((wp.x - m.ax) * (m.bx - m.ax) + (wp.z - m.az) * (m.bz - m.az)) / len;
+    let pos = along - LARG / 2;
+    pos = Math.round(Math.min(Math.max(pos, LARG / 2 + 0.02), len - LARG / 2 - 0.02) * 100) / 100;
+    let allege = wp.y - m.base_y;
+    allege = Math.round(Math.min(Math.max(allege, 0), Math.max(0, m.hauteur - HAUT - 0.02)) * 100) / 100;
+    creerOuverture(m.id, pos, allege);
   }
 
   // ── Ouvertures : CRUD ──
@@ -909,25 +1007,38 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   async function supprimerAncre(id: string) {
     await db.from("bim_ancres").delete().eq("id", id);
     setAncres((prev) => prev.filter((a) => a.id !== id));
+    setAncreSel((prev) => (prev === id ? null : prev));
+  }
+
+  async function majAncre(id: string, x: number, y: number, z: number) {
+    setAncres((prev) => prev.map((a) => (a.id === id ? { ...a, x, y, z } : a)));
+    const { error } = await db.from("bim_ancres").update({ x, y, z }).eq("id", id);
+    if (error) alert(`Ancre non mise à jour : ${error.message}`);
   }
 
   // Accrochage planimétrique (x,z) d'un point d'extrémité de mur en cours d'édition :
   // ancres → extrémités d'autres murs → projection sur segment d'un autre mur (jonction T)
-  function snapXZ(x: number, z: number, excludeId: string): { x: number; z: number; snap: boolean } {
+  type SnapType = "ancre" | "sommet" | "milieu" | "arete" | "scan";
+  function snapXZ(x: number, z: number, excludeId: string): { x: number; z: number; snap: boolean; type?: SnapType } {
     let bx = x, bz = z, snap = false;
+    let type: SnapType | undefined;
     let bd = 0.3;
     for (const a of ancresRef.current) {
       const d = Math.hypot(x - a.x, z - a.z);
-      if (d < bd) { bd = d; bx = a.x; bz = a.z; snap = true; }
+      if (d < bd) { bd = d; bx = a.x; bz = a.z; snap = true; type = "ancre"; }
     }
     for (const m of mursRef.current) {
       if (m.id === excludeId) continue;
       for (const [ex, ez] of [[m.ax, m.az], [m.bx, m.bz]] as const) {
         const d = Math.hypot(x - ex, z - ez);
-        if (d < bd) { bd = d; bx = ex; bz = ez; snap = true; }
+        if (d < bd) { bd = d; bx = ex; bz = ez; snap = true; type = "sommet"; }
       }
+      // milieu du segment (comme les points chauds ArchiCAD)
+      const mx = (m.ax + m.bx) / 2, mz = (m.az + m.bz) / 2;
+      const dm = Math.hypot(x - mx, z - mz);
+      if (dm < bd) { bd = dm; bx = mx; bz = mz; snap = true; type = "milieu"; }
     }
-    if (snap) return { x: bx, z: bz, snap };
+    if (snap) return { x: bx, z: bz, snap, type };
     // aucune extrémité proche : projeter sur le segment d'un autre mur (jonction en T)
     let bt = 0.2;
     for (const m of mursRef.current) {
@@ -939,9 +1050,9 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       t = Math.min(1, Math.max(0, t));
       const px = m.ax + t * dx, pz = m.az + t * dz;
       const d = Math.hypot(x - px, z - pz);
-      if (d < bt) { bt = d; bx = px; bz = pz; snap = true; }
+      if (d < bt) { bt = d; bx = px; bz = pz; snap = true; type = "arete"; }
     }
-    return { x: bx, z: bz, snap };
+    return { x: bx, z: bz, snap, type };
   }
 
   // Accrochage au sommet du triangle touché uniquement (sans les murs) — utilisé
@@ -966,12 +1077,13 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
   }
 
   // Accrochage : sommet du triangle touché (niv. 2) puis extrémités de murs (niv. 4)
-  function snapPick(hit: THREE.Intersection): THREE.Vector3 {
+  function snapPickInfo(hit: THREE.Intersection): { p: THREE.Vector3; type?: SnapType } {
     let p = hit.point.clone();
+    let type: SnapType | undefined;
     // Ancres : points d'accroche délibérés → priorité absolue (dans un rayon de 30 cm)
     for (const a of ancresRef.current) {
       if (new THREE.Vector3(a.x, a.y, a.z).distanceTo(hit.point) < 0.3)
-        return new THREE.Vector3(a.x, a.y, a.z);
+        return { p: new THREE.Vector3(a.x, a.y, a.z), type: "ancre" };
     }
     const mesh = hit.object as THREE.Mesh;
     if (mesh.isMesh && hit.face) {
@@ -980,17 +1092,44 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       for (const idx of [hit.face.a, hit.face.b, hit.face.c]) {
         const v = new THREE.Vector3().fromBufferAttribute(pos, idx).applyMatrix4(mesh.matrixWorld);
         const d = v.distanceTo(hit.point);
-        if (d < bd) { bd = d; p = v; }
+        if (d < bd) { bd = d; p = v; type = "scan"; }
       }
     }
     let bw = 0.25;
     for (const m of mursRef.current) {
       for (const [ex, ez] of [[m.ax, m.az], [m.bx, m.bz]] as const) {
         const d = Math.hypot(p.x - ex, p.z - ez);
-        if (d < bw) { bw = d; p = new THREE.Vector3(ex, p.y, ez); }
+        if (d < bw) { bw = d; p = new THREE.Vector3(ex, p.y, ez); type = "sommet"; }
       }
     }
-    return p;
+    return { p, type };
+  }
+
+  function snapPick(hit: THREE.Intersection): THREE.Vector3 {
+    return snapPickInfo(hit).p;
+  }
+
+  // Repère d'accrochage : losange filaire coloré selon le type de cible
+  const SNAP_COLORS: Record<SnapType, number> = {
+    ancre: 0xd946ef, sommet: 0xfacc15, milieu: 0xf97316, arete: 0x2563eb, scan: 0x10b981,
+  };
+  function setSnapMarker(p: THREE.Vector3 | null, type?: SnapType) {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    if (!p || !type) { if (snapMarkerRef.current) snapMarkerRef.current.visible = false; return; }
+    let mk = snapMarkerRef.current;
+    if (!mk) {
+      mk = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.1),
+        new THREE.MeshBasicMaterial({ color: 0xfacc15, depthTest: false, wireframe: true })
+      );
+      mk.renderOrder = 7;
+      snapMarkerRef.current = mk;
+      scene.add(mk);
+    }
+    (mk.material as THREE.MeshBasicMaterial).color.setHex(SNAP_COLORS[type]);
+    mk.position.copy(p);
+    mk.visible = true;
   }
 
   // ── Outils Mesure + Mise à niveau ──
@@ -1211,7 +1350,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { activerMode(null); setMurSel(null); setOuvSel(null); setDalleSel(null); setToitSel(null); }
+      if (e.key === "Escape") { activerMode(null); setMurSel(null); setOuvSel(null); setDalleSel(null); setToitSel(null); setAncreSel(null); setPalette(null); setArmedOp(null); }
       if (e.key === "Enter" && dalleModeRef.current && dalleDraftRef.current.length >= 3) finirDalle();
     };
     window.addEventListener("keydown", onKey);
@@ -1281,90 +1420,162 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       ray.setFromCamera(mouse, camera);
       return ray;
     };
+    // Picking « écran » pour les petites cibles (poignées, ancres) : au lieu d'exiger
+    // que le rayon 3D touche la géométrie (quelques px à l'écran, quasi imprenable),
+    // on projette chaque cible et on prend la plus proche du clic dans un rayon en px.
+    const pickScreen = (e: PointerEvent, objs: THREE.Object3D[], tolPx = 14): THREE.Object3D | null => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      let best: THREE.Object3D | null = null;
+      let bd = tolPx;
+      for (const o of objs) {
+        const v = o.position.clone().project(camera);
+        if (v.z < -1 || v.z > 1) continue;   // hors du frustum (derrière la caméra…)
+        const sx = rect.left + ((v.x + 1) / 2) * rect.width;
+        const sy = rect.top + ((1 - v.y) / 2) * rect.height;
+        const d = Math.hypot(e.clientX - sx, e.clientY - sy);
+        if (d < bd) { bd = d; best = o; }
+      }
+      return best;
+    };
     let downPos: { x: number; y: number } | null = null;
     type WallDrag =
       | { kind: "move"; id: string; orig: Mur; start: THREE.Vector3; base: THREE.Vector3;
-          plane: THREE.Plane; dx: number; dz: number; moved: boolean }
+          plane: THREE.Plane; dx: number; dz: number; moved: boolean; op?: "perp" | null }
       | { kind: "end"; id: string; orig: Mur; end: "a" | "b"; hy: number;
-          curX: number; curZ: number; moved: boolean }
+          curX: number; curZ: number; moved: boolean; op?: "axe" | null }
       | { kind: "height"; id: string; orig: Mur; plane: THREE.Plane; curH: number; moved: boolean }
       | { kind: "ouv"; id: string; mur: Mur; sub: "move" | "w" | "h"; plane: THREE.Plane;
-          cur: { pos: number; allege: number; largeur: number; hauteur: number }; moved: boolean };
+          cur: { pos: number; allege: number; largeur: number; hauteur: number }; moved: boolean }
+      | { kind: "ancre"; id: string; y0: number; cur: THREE.Vector3; moved: boolean };
     let drag: WallDrag | null = null;
     const rnd = (v: number) => Math.round(v * 100) / 100;
 
     const onDown = (e: PointerEvent) => {
       downPos = { x: e.clientX, y: e.clientY };
+      setPalette(null);   // tout nouveau clic dans la vue ferme la palette
       // Édition : drag d'une poignée ou déplacement du mur sélectionné (hors modes outils)
       if (murModeRef.current || pipetteRef.current || mesureModeRef.current
           || niveauModeRef.current || ouvModeRef.current || dalleModeRef.current
           || toitModeRef.current || ancreModeRef.current || e.button !== 0) return;
       const selId = murSelRef.current;
-      if (!selId) return;
-      const mur = mursRef.current.find((m) => m.id === selId);
-      if (!mur) return;
-      // 0) poignée d'ouverture (prioritaire quand une baie est sélectionnée)
-      if (ouvSelRef.current && ouvHandlesRef.current.length) {
-        const oHit = makeRay(e).intersectObjects(ouvHandlesRef.current)[0];
-        if (oHit) {
-          const sub = oHit.object.userData.ouvHandle as "move" | "w" | "h";
-          const oId = oHit.object.userData.ouvId as string;
-          const o = ouverturesRef.current.find((x) => x.id === oId);
-          if (o) {
-            const dx = mur.bx - mur.ax, dz = mur.bz - mur.az;
-            const len = Math.hypot(dx, dz) || 1;
-            const px = -dz / len, pz = dx / len, off = (mur.decalage ?? 0) * mur.epaisseur;
-            const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
-              new THREE.Vector3(px, 0, pz),
-              new THREE.Vector3(mur.ax + px * off, 0, mur.az + pz * off));
-            drag = { kind: "ouv", id: oId, mur: { ...mur }, sub, plane,
-                     cur: { pos: o.pos, allege: o.allege, largeur: o.largeur, hauteur: o.hauteur }, moved: false };
-            controls.enabled = false;
-            return;
+      const mur = selId ? (mursRef.current.find((m) => m.id === selId) ?? null) : null;
+      // Poignées du mur sélectionné (prioritaires sur tout le reste)
+      if (mur) {
+        // 0) poignée d'ouverture (prioritaire quand une baie est sélectionnée)
+        if (ouvSelRef.current && ouvHandlesRef.current.length) {
+          const oHit = pickScreen(e, ouvHandlesRef.current);
+          if (oHit) {
+            const sub = oHit.userData.ouvHandle as "move" | "w" | "h";
+            const oId = oHit.userData.ouvId as string;
+            const o = ouverturesRef.current.find((x) => x.id === oId);
+            if (o) {
+              const dx = mur.bx - mur.ax, dz = mur.bz - mur.az;
+              const len = Math.hypot(dx, dz) || 1;
+              const px = -dz / len, pz = dx / len, off = (mur.decalage ?? 0) * mur.epaisseur;
+              const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+                new THREE.Vector3(px, 0, pz),
+                new THREE.Vector3(mur.ax + px * off, 0, mur.az + pz * off));
+              drag = { kind: "ouv", id: oId, mur: { ...mur }, sub, plane,
+                       cur: { pos: o.pos, allege: o.allege, largeur: o.largeur, hauteur: o.hauteur }, moved: false };
+              controls.enabled = false;
+              return;
+            }
           }
         }
-      }
-      // 1) poignée prioritaire (extrémité jaune ou hauteur verte)
-      const hHit = makeRay(e).intersectObjects(handleMeshesRef.current)[0];
-      if (hHit) {
-        const kind = hHit.object.userData.handleKind as "a" | "b" | "h";
-        if (kind === "h") {
-          // plan vertical passant par la poignée, face à la caméra → drag en hauteur
-          const p0 = hHit.object.position.clone();
-          const nrm = camera.position.clone().sub(p0); nrm.y = 0;
-          if (nrm.lengthSq() < 1e-6) nrm.set(0, 0, 1);
-          nrm.normalize();
-          drag = { kind: "height", id: selId, orig: { ...mur },
-                   plane: new THREE.Plane().setFromNormalAndCoplanarPoint(nrm, p0),
-                   curH: mur.hauteur, moved: false };
-        } else {
-          drag = { kind: "end", id: selId, orig: { ...mur }, end: kind, hy: hHit.object.position.y,
-                   curX: kind === "a" ? mur.ax : mur.bx, curZ: kind === "a" ? mur.az : mur.bz, moved: false };
+        // 1) poignée prioritaire (extrémité jaune ou hauteur verte)
+        const hHit = pickScreen(e, handleMeshesRef.current);
+        if (hHit) {
+          const kind = hHit.userData.handleKind as "a" | "b" | "h";
+          if (kind === "h") {
+            // plan vertical passant par la poignée, face à la caméra → drag en hauteur
+            const p0 = hHit.position.clone();
+            const nrm = camera.position.clone().sub(p0); nrm.y = 0;
+            if (nrm.lengthSq() < 1e-6) nrm.set(0, 0, 1);
+            nrm.normalize();
+            drag = { kind: "height", id: mur.id, orig: { ...mur },
+                     plane: new THREE.Plane().setFromNormalAndCoplanarPoint(nrm, p0),
+                     curH: mur.hauteur, moved: false };
+          } else {
+            drag = { kind: "end", id: mur.id, orig: { ...mur }, end: kind, hy: hHit.position.y,
+                     curX: kind === "a" ? mur.ax : mur.bx, curZ: kind === "a" ? mur.az : mur.bz,
+                     moved: false, op: armedOpRef.current === "axe" ? "axe" : null };
+            setArmedOp(null);
+          }
+          controls.enabled = false;
+          return;
         }
-        controls.enabled = false;
-        return;
       }
-      // 2) déplacement du corps
-      const mesh = murMeshMapRef.current.get(selId);
+      // 2) ancre : sélection + déplacement (indépendant de la sélection de mur)
+      const aHit = pickScreen(e, [...ancreMeshMapRef.current.values()]);
+      if (aHit) {
+        const aId = aHit.userData.ancreId as string;
+        const a = ancresRef.current.find((x) => x.id === aId);
+        if (a) {
+          setAncreSel(aId);
+          drag = { kind: "ancre", id: aId, y0: a.y, cur: new THREE.Vector3(a.x, a.y, a.z), moved: false };
+          controls.enabled = false;
+          return;
+        }
+      }
+      // 3) déplacement du corps du mur sélectionné
+      if (!mur) return;
+      const mesh = murMeshMapRef.current.get(mur.id);
       if (!mesh) return;
       const hit = makeRay(e).intersectObject(mesh)[0];
       if (!hit) return;
       drag = {
-        kind: "move", id: selId, orig: { ...mur }, start: hit.point.clone(), base: mesh.position.clone(),
+        kind: "move", id: mur.id, orig: { ...mur }, start: hit.point.clone(), base: mesh.position.clone(),
         plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -hit.point.y),
-        dx: 0, dz: 0, moved: false,
+        dx: 0, dz: 0, moved: false, op: armedOpRef.current === "perp" ? "perp" : null,
       };
+      setArmedOp(null);
       controls.enabled = false;
     };
 
     const onMove = (e: PointerEvent) => {
-      if (!drag) return;
+      if (!drag) {
+        // Survol en mode tracé (mur/dalle/toit/ancre) : afficher le repère d'accroche
+        if (murModeRef.current || dalleModeRef.current || toitModeRef.current || ancreModeRef.current) {
+          const hov = makeRay(e).intersectObjects([...meshMapRef.current.values()], true)[0];
+          if (hov) { const info = snapPickInfo(hov); setSnapMarker(info.type ? info.p : null, info.type); }
+          else setSnapMarker(null);
+        }
+        return;
+      }
+      // Anti-jitter : tant que le pointeur n'a pas bougé d'au moins 4 px écran,
+      // on reste en « clic simple » (Chrome émet parfois un pointermove immobile
+      // entre down et up, ce qui volait le clic → la palette ne s'ouvrait jamais).
+      if (!drag.moved && downPos
+          && Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) < 4) return;
       const ray = makeRay(e);
+      if (drag.kind === "ancre") {
+        const ad = drag;
+        // L'ancre suit la surface du scan sous le curseur ; hors scan, on la garde
+        // sur le plan horizontal de son altitude d'origine.
+        const hit = ray.intersectObjects([...meshMapRef.current.values()], true)[0];
+        const np = new THREE.Vector3();
+        if (hit) np.copy(hit.point);
+        else if (!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -ad.y0), np)) return;
+        if (!ad.moved && np.distanceTo(ad.cur) < 0.01) return;
+        ad.moved = true;
+        ad.cur.copy(np);
+        const mesh = ancreMeshMapRef.current.get(ad.id);
+        if (mesh) mesh.position.copy(np);
+        return;
+      }
       if (drag.kind === "move") {
         const p = new THREE.Vector3();
         if (!ray.ray.intersectPlane(drag.plane, p)) return;
         drag.dx = p.x - drag.start.x;
         drag.dz = p.z - drag.start.z;
+        if (drag.op === "perp") {
+          // Contrainte perpendiculaire : ne garder que la composante normale au mur
+          const wx = drag.orig.bx - drag.orig.ax, wz = drag.orig.bz - drag.orig.az;
+          const wl = Math.hypot(wx, wz) || 1;
+          const nx = -wz / wl, nz = wx / wl;
+          const dot = drag.dx * nx + drag.dz * nz;
+          drag.dx = nx * dot; drag.dz = nz * dot;
+        }
         if (!drag.moved && Math.hypot(drag.dx, drag.dz) < 0.01) return;
         drag.moved = true;
         const mesh = murMeshMapRef.current.get(drag.id);
@@ -1436,7 +1647,18 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         if (!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -ed.hy), gp)) return;
         x = gp.x; z = gp.z;
       }
-      const s = snapXZ(x, z, ed.id);
+      let s = snapXZ(x, z, ed.id);
+      if (ed.op === "axe") {
+        // Contrainte « dans l'axe » : projeter sur la droite d'origine du mur
+        const ax0 = ed.orig.ax, az0 = ed.orig.az;
+        const ddx = ed.orig.bx - ax0, ddz = ed.orig.bz - az0;
+        const l2 = ddx * ddx + ddz * ddz;
+        if (l2 > 1e-6) {
+          const t = ((s.x - ax0) * ddx + (s.z - az0) * ddz) / l2;
+          s = { x: ax0 + t * ddx, z: az0 + t * ddz, snap: s.snap, type: s.type };
+        }
+      }
+      setSnapMarker(s.snap ? new THREE.Vector3(s.x, ed.hy, s.z) : null, s.type);
       ed.curX = s.x; ed.curZ = s.z; ed.moved = true;
       const tmp: Mur = { ...ed.orig,
         ...(ed.end === "a" ? { ax: s.x, az: s.z } : { bx: s.x, bz: s.z }) };
@@ -1455,12 +1677,27 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     };
 
     const onUp = (e: PointerEvent) => {
+      setSnapMarker(null);
       if (drag) {
         controls.enabled = true;
         const d = drag;
         drag = null;
         downPos = null;
-        if (!d.moved) return;
+        if (!d.moved) {
+          // Clic simple (sans glisser) sur une poignée d'extrémité ou le corps du
+          // mur sélectionné → palette contextuelle d'outils près du curseur.
+          const rect = renderer.domElement.getBoundingClientRect();
+          if (d.kind === "end") {
+            setPalette({ kind: "node", murId: d.id, end: d.end,
+              sx: e.clientX - rect.left, sy: e.clientY - rect.top,
+              wp: { x: d.curX, y: d.hy, z: d.curZ } });
+          } else if (d.kind === "move") {
+            setPalette({ kind: "edge", murId: d.id,
+              sx: e.clientX - rect.left, sy: e.clientY - rect.top,
+              wp: { x: d.start.x, y: d.start.y, z: d.start.z } });
+          }
+          return;
+        }
         if (d.kind === "end") {
           majMur(d.id, d.end === "a" ? { ax: d.curX, az: d.curZ } : { bx: d.curX, bz: d.curZ });
           return;
@@ -1471,6 +1708,10 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         }
         if (d.kind === "ouv") {
           majOuverture(d.id, { pos: d.cur.pos, allege: d.cur.allege, largeur: d.cur.largeur, hauteur: d.cur.hauteur });
+          return;
+        }
+        if (d.kind === "ancre") {
+          majAncre(d.id, d.cur.x, d.cur.y, d.cur.z);
           return;
         }
         let { dx, dz } = d;
@@ -1589,6 +1830,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
       setMurSel((prev) => { if (prev !== newSel) setOuvSel(null); return newSel; });
       setDalleSel(null);
       setToitSel(null);
+      setAncreSel(null);   // clic hors ancre → désélectionne l'ancre courante
     };
     renderer.domElement.addEventListener("pointerdown", onDown);
     renderer.domElement.addEventListener("pointermove", onMove);
@@ -1847,6 +2089,27 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
             ⤢
           </button>
         </div>
+
+        {/* Transparence du scan : dégage les poignées d'édition masquées par le mesh */}
+        <div className="flex items-center gap-2 px-2 py-1.5 border-b border-slate-100">
+          <span
+            title="Rendre le scan translucide pour atteindre les poignées d'édition (murs, toitures, ouvertures) masquées par le mesh"
+            className="text-xs text-slate-500 whitespace-nowrap select-none">
+            👁 Scan
+          </span>
+          <input
+            type="range"
+            min={0.1}
+            max={1}
+            step={0.05}
+            value={scanOpacity}
+            onChange={(e) => setScanOpacity(parseFloat(e.target.value))}
+            className="flex-1 accent-orange-500"
+          />
+          <span className="text-[11px] font-mono text-slate-400 w-9 text-right select-none">
+            {Math.round(scanOpacity * 100)}%
+          </span>
+        </div>
         <div className="border-b border-slate-100">
           {sectionHeader("pieces", "🧩", "Pièces", layers.length)}
           {openCat === "pieces" && (
@@ -1899,19 +2162,25 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
             </button>
             {ancres.length > 0 && (
               <div className="flex flex-col gap-1 mt-2">
-                {ancres.map((a, i) => (
+                {ancres.map((a, i) => {
+                  const sel = a.id === ancreSel;
+                  return (
                   <div key={a.id}
-                    className="group flex items-center gap-2 text-xs text-slate-600 border border-slate-100 rounded px-2 py-1">
-                    <span className="text-fuchsia-500">◆</span>
+                    onClick={() => setAncreSel(sel ? null : a.id)}
+                    title="Sélectionner l'ancre (puis glissez-la dans la vue 3D pour la déplacer)"
+                    className={`group flex items-center gap-2 text-xs border rounded px-2 py-1 cursor-pointer ${
+                      sel ? "border-cyan-400 bg-cyan-50 text-cyan-700" : "border-slate-100 text-slate-600 hover:bg-slate-50"}`}>
+                    <span className={sel ? "text-cyan-500" : "text-fuchsia-500"}>◆</span>
                     <span className="text-slate-400">{i + 1}.</span>
                     <span className="font-mono text-[10px] text-slate-400">
                       {a.x.toFixed(1)}, {a.z.toFixed(1)}
                     </span>
-                    <button onClick={() => supprimerAncre(a.id)}
+                    <button onClick={(e) => { e.stopPropagation(); supprimerAncre(a.id); }}
                       className="ml-auto opacity-0 group-hover:opacity-70 hover:!opacity-100 text-xs"
                       title="Supprimer l'ancre">🗑</button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             </div>
@@ -2275,11 +2544,69 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
             🚪 Poignées : <span className="text-orange-300">orange</span> = déplacer · <span className="text-cyan-300">cyan</span> = largeur · <span className="text-emerald-300">verte</span> = hauteur
           </div>
         )}
-        {!murMode && !pipette && !mesureMode && !niveauMode && !ouvMode && !dalleMode && !toitMode && !ancreMode && murSel && !ouvSel && (
+        {!murMode && !pipette && !mesureMode && !niveauMode && !ouvMode && !dalleMode && !toitMode && !ancreMode && murSel && !ouvSel && !ancreSel && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
             ↔ Glissez le corps pour déplacer · <span className="text-yellow-300">poignées jaunes</span> = longueur/ajuster (accrochage ancres/murs) · <span className="text-emerald-300">verte</span> = hauteur · Échap : désélectionner
           </div>
         )}
+        {!murMode && !pipette && !mesureMode && !niveauMode && !ouvMode && !dalleMode && !toitMode && !ancreMode && ancreSel && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
+            📍 <span className="text-cyan-300">Ancre sélectionnée</span> — glissez-la pour la déplacer (elle suit la surface du scan) · Échap : désélectionner
+          </div>
+        )}
+        {armedOp && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/70 backdrop-blur text-xs text-white px-3 py-1.5 rounded-full pointer-events-none">
+            {armedOp === "axe"
+              ? "∥ Glissez une poignée jaune — déplacement contraint dans l'axe du mur"
+              : "⊥ Glissez le corps du mur — déplacement perpendiculaire uniquement"} · Échap : annuler
+          </div>
+        )}
+
+        {/* Palette contextuelle façon ArchiCAD : clic simple sur une poignée (nœud)
+            ou le corps (arête) du mur sélectionné → choix de l'opération */}
+        {palette && (() => {
+          const pm = murs.find((m) => m.id === palette.murId);
+          if (!pm) return null;
+          const btn = "flex items-center gap-2 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-100 rounded transition-colors whitespace-nowrap";
+          return (
+            <div
+              className="absolute z-20 bg-white rounded-xl shadow-xl border border-slate-200 p-1 flex flex-col"
+              style={{ left: Math.max(8, Math.min(palette.sx, 1200)), top: Math.max(8, palette.sy - 8),
+                       transform: "translate(-50%, -100%)" }}>
+              {palette.kind === "node" ? (
+                <>
+                  <button className={btn} title="Déplacer librement l'extrémité (drag classique de la poignée)"
+                    onClick={() => { setArmedOp(null); setPalette(null); }}>
+                    ✥ <span>Déplacer libre</span>
+                  </button>
+                  <button className={btn} title="Le prochain drag de la poignée reste sur la droite du mur (allonger / raccourcir sans dévier)"
+                    onClick={() => { setArmedOp("axe"); setPalette(null); }}>
+                    ∥ <span>Dans l&apos;axe</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button className={btn} title="Déplacer librement le mur (drag classique du corps)"
+                    onClick={() => { setArmedOp(null); setPalette(null); }}>
+                    ✥ <span>Déplacer</span>
+                  </button>
+                  <button className={btn} title="Le prochain drag du corps ne bouge le mur que perpendiculairement à son axe"
+                    onClick={() => { setArmedOp("perp"); setPalette(null); }}>
+                    ⊥ <span>Perpendiculaire</span>
+                  </button>
+                  <button className={btn} title="Couper le mur en deux au point cliqué (les ouvertures suivent leur tronçon)"
+                    onClick={() => { diviserMur(pm, palette.wp.x, palette.wp.z); setPalette(null); }}>
+                    ✂ <span>Diviser ici</span>
+                  </button>
+                  <button className={btn} title="Percer une baie 1,00 × 1,15 m centrée sur le point cliqué"
+                    onClick={() => { ouvertureAuPoint(pm, palette.wp); setPalette(null); }}>
+                    ▢ <span>Ouverture ici</span>
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Fenêtre flottante de propriétés de l'élément sélectionné */}
         {(() => {
