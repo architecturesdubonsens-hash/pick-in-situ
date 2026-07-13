@@ -680,11 +680,10 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         ancreMeshMapRef.current.set(a.id, mesh);
         scene.add(mesh);
       }
-      mesh.userData = { ancreId: a.id };
-      mesh.position.set(a.x, a.y, a.z);
       const sel = a.id === ancreSel;
+      mesh.userData = { ancreId: a.id, baseScale: sel ? 1.6 : 1 };
+      mesh.position.set(a.x, a.y, a.z);
       (mesh.material as THREE.MeshBasicMaterial).color.setHex(sel ? 0x06b6d4 : 0xd946ef);
-      mesh.scale.setScalar(sel ? 1.6 : 1);
     }
   }, [ancres, ancreSel]);
 
@@ -1394,7 +1393,8 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
+    controls.dampingFactor = 0.12;  // 0.05 rendait zoom/orbite très mous
+    controls.zoomSpeed = 1.6;
     controls.zoomToCursor = true;   // zoom centré sur le curseur
     controlsRef.current = controls;
 
@@ -1423,7 +1423,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     // Picking « écran » pour les petites cibles (poignées, ancres) : au lieu d'exiger
     // que le rayon 3D touche la géométrie (quelques px à l'écran, quasi imprenable),
     // on projette chaque cible et on prend la plus proche du clic dans un rayon en px.
-    const pickScreen = (e: PointerEvent, objs: THREE.Object3D[], tolPx = 14): THREE.Object3D | null => {
+    const pickScreen = (e: PointerEvent, objs: THREE.Object3D[], tolPx = 18): THREE.Object3D | null => {
       const rect = renderer.domElement.getBoundingClientRect();
       let best: THREE.Object3D | null = null;
       let bd = tolPx;
@@ -1539,9 +1539,21 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
           const hov = makeRay(e).intersectObjects([...meshMapRef.current.values()], true)[0];
           if (hov) { const info = snapPickInfo(hov); setSnapMarker(info.type ? info.p : null, info.type); }
           else setSnapMarker(null);
+        } else if (!pipetteRef.current && !mesureModeRef.current && !niveauModeRef.current
+                   && !ouvModeRef.current) {
+          // Hors mode outil : curseur « main » au survol d'une cible saisissable
+          // (poignées du mur/de la baie sélectionnés, ancres) — feedback indispensable
+          // pour savoir qu'on peut attraper avant de cliquer.
+          const grabbables = [
+            ...(murSelRef.current ? handleMeshesRef.current : []),
+            ...(ouvSelRef.current ? ouvHandlesRef.current : []),
+            ...ancreMeshMapRef.current.values(),
+          ];
+          renderer.domElement.style.cursor = pickScreen(e, grabbables) ? "grab" : "";
         }
         return;
       }
+      if (drag.moved) renderer.domElement.style.cursor = "grabbing";
       // Anti-jitter : tant que le pointeur n'a pas bougé d'au moins 4 px écran,
       // on reste en « clic simple » (Chrome émet parfois un pointermove immobile
       // entre down et up, ce qui volait le clic → la palette ne s'ouvrait jamais).
@@ -1678,6 +1690,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
 
     const onUp = (e: PointerEvent) => {
       setSnapMarker(null);
+      renderer.domElement.style.cursor = "";
       if (drag) {
         controls.enabled = true;
         const d = drag;
@@ -1776,7 +1789,10 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
         allege = Math.round(Math.min(Math.max(allege, 0), Math.max(0, m.hauteur - HAUT - 0.02)) * 100) / 100;
         creerOuverture(murId, pos, allege);
         setMurSel(murId);   // affiche la fenêtre de propriétés du mur percé
-        return; // le mode reste actif pour enchaîner
+        // La baie créée est sélectionnée (mode édition, poignées actives) → on sort
+        // du mode ajout : sinon chaque clic d'édition perçait une nouvelle baie.
+        setOuvMode(false);
+        return;
       }
       // Dalle : clics des sommets au sol, fermeture par re-clic du 1er point ou Entrée
       if (dalleModeRef.current) {
@@ -1894,6 +1910,16 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
     function animate() {
       raf = requestAnimationFrame(animate);
       controls.update();
+      // Poignées et ancres à taille écran ~constante : leur géométrie fait ~10 cm
+      // monde, invisible et imprenable dès qu'on recule. On compense par la
+      // distance caméra (facteur 0.11 ≈ 12 px à 1 rad de fov vertical).
+      for (const h of [...handleMeshesRef.current, ...ouvHandlesRef.current,
+                       ...ancreMeshMapRef.current.values()]) {
+        const base = (h.userData.baseScale as number | undefined) ?? h.scale.x;
+        if (h.userData.baseScale === undefined) h.userData.baseScale = base;
+        const d = camera.position.distanceTo(h.position);
+        h.scale.setScalar(base * Math.min(4, Math.max(1, d * 0.11)));
+      }
       renderer.render(scene, camera);
     }
     animate();
@@ -2652,7 +2678,7 @@ export default function ViewerMulti({ chantierNom, chantierId, scans }: Props) {
                       <div key={o.id} className="rounded-lg p-2 flex flex-col gap-1 border"
                         style={oSel ? { borderColor: "#f97316", background: "#fff7ed" } : { borderColor: "#ffedd5" }}>
                         <div className="flex items-center gap-2 text-[11px] text-slate-500 cursor-pointer"
-                          onClick={() => setOuvSel(oSel ? null : o.id)}>
+                          onClick={() => { setOuvSel(oSel ? null : o.id); if (ouvMode) activerMode(null); }}>
                           <span className="font-medium">🚪 {j + 1}</span>
                           {oSel && <span className="text-[9px] text-orange-500">poignées 3D actives</span>}
                           <button onClick={(e) => { e.stopPropagation(); supprimerOuverture(o.id); }}

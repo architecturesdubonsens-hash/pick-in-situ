@@ -7,8 +7,10 @@
  *     polygonales), IfcSlab .ROOF. (pans inclinés, placement 3D orienté).
  * • buildBimPlanDXF → plan DXF (calques MURS / OUVERTURES / DALLES / TOITS).
  *
- * Repère : Three.js est Y-up (x, y=haut, z) ; IFC est Z-up. On mappe donc
- * (x, y, z)_monde → (x, z, y)_IFC pour points ET directions.
+ * Repère : Three.js est Y-up MAIN DROITE (x, y=haut, z) ; IFC est Z-up main
+ * droite. Le mapping (x,y,z)→(x,z,y) est un MIROIR (det −1 : maquette
+ * symétrique dans ArchiCAD). Le mapping correct est la rotation pure
+ * (x, y, z)_monde → (x, −z, y)_IFC, appliquée aux points ET aux directions.
  */
 
 export interface MurEx {
@@ -121,16 +123,18 @@ export function buildBimIFC(model: BimModel, nomProjet = "Relevé"): string {
     const len = Math.hypot(dx, dz);
     if (len < 0.02) continue;
     const off = (m.decalage ?? 0) * m.epaisseur;   // décalage perpendiculaire du corps
-    // IFC XY = (monde x, monde z) ; Z = hauteur monde
-    const place = placementZ(w, m.ax, m.az, m.base_y, Math.atan2(dz, dx));
-    const forme = rectExtrude(w, ctx, len, m.epaisseur, m.hauteur, len / 2, off);
+    // IFC XY = (monde x, −monde z) ; Z = hauteur monde. L'axe du mur devient
+    // (dx, −dz) → angle atan2(−dz, dx) ; la perpendiculaire monde du décalage
+    // correspond à −Y local IFC, d'où cy = −off dans les profils.
+    const place = placementZ(w, m.ax, -m.az, m.base_y, Math.atan2(-dz, dx));
+    const forme = rectExtrude(w, ctx, len, m.epaisseur, m.hauteur, len / 2, -off);
     const mur = w.add(`IFCWALL('${ifcGuid()}',$,${T("Mur")},$,$,${w.ref(place)},${w.ref(forme)},$,.SOLIDWALL.)`);
     contenu.push(mur);
 
     for (const o of model.ouvertures.filter((x) => x.mur_id === m.id)) {
-      const pOuv = placementZ(w, m.ax + (dx / len) * o.pos, m.az + (dz / len) * o.pos,
-                              m.base_y + o.allege, Math.atan2(dz, dx));
-      const fOuv = rectExtrude(w, ctx, o.largeur, m.epaisseur + 0.2, o.hauteur, 0, off);
+      const pOuv = placementZ(w, m.ax + (dx / len) * o.pos, -(m.az + (dz / len) * o.pos),
+                              m.base_y + o.allege, Math.atan2(-dz, dx));
+      const fOuv = rectExtrude(w, ctx, o.largeur, m.epaisseur + 0.2, o.hauteur, 0, -off);
       const op = w.add(`IFCOPENINGELEMENT('${ifcGuid()}',$,${T("Baie")},$,$,${w.ref(pOuv)},${w.ref(fOuv)},$,.OPENING.)`);
       w.add(`IFCRELVOIDSELEMENT('${ifcGuid()}',$,$,$,${w.ref(mur)},${w.ref(op)})`);
     }
@@ -139,7 +143,7 @@ export function buildBimIFC(model: BimModel, nomProjet = "Relevé"): string {
   // ── Dalles (polygone au sol, extrudé vers le bas) ──
   for (const d of model.dalles) {
     if (d.points.length < 3) continue;
-    const pts = d.points.map(([x, z]) => w.add(`IFCCARTESIANPOINT((${F(x)},${F(z)}))`));
+    const pts = d.points.map(([x, z]) => w.add(`IFCCARTESIANPOINT((${F(x)},${F(-z)}))`));
     const poly = w.add(`IFCPOLYLINE((${[...pts, pts[0]].map((p) => w.ref(p)).join(",")}))`);
     const profil = w.add(`IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,${w.ref(poly)})`);
     const posE = w.add(`IFCAXIS2PLACEMENT3D(${w.ref(w.add(`IFCCARTESIANPOINT((0.,0.,${F(d.base_y)}))`))},$,$)`);
@@ -170,12 +174,17 @@ export function buildBimIFC(model: BimModel, nomProjet = "Relevé"): string {
     ];
     const nLen = Math.hypot(n[0], n[1], n[2]) || 1;
     n = [n[0] / nLen, n[1] / nLen, n[2] / nLen];
-    if (n[1] < 0) n = [-n[0], -n[1], -n[2]];
-    // Y-up monde → Z-up IFC : (x,y,z) → (x,z,y)
-    const map3 = (v: [number, number, number]): [number, number, number] => [v[0], v[2], v[1]];
+    // Si la normale pointe vers le bas on la retourne pour que la face p1p2p3
+    // reste la face SUPÉRIEURE — mais le Y local (n × el) se retourne alors
+    // aussi : le profil doit couvrir [−sLen, 0] au lieu de [0, sLen], sinon le
+    // pan part du mauvais côté de l'égout (toit « détaché » constaté).
+    let flip = false;
+    if (n[1] < 0) { n = [-n[0], -n[1], -n[2]]; flip = true; }
+    // Y-up monde → Z-up IFC : rotation pure (x,y,z) → (x,−z,y)
+    const map3 = (v: [number, number, number]): [number, number, number] => [v[0], -v[2], v[1]];
     const place = placement3D(w, map3(p1), map3(n), map3(el));
-    // profil rectangle |e| × |s|, centre au milieu, extrudé de l'épaisseur vers −Z local
-    const forme = rectExtrude(w, ctx, eLen, sLen, t.epaisseur, eLen / 2, sLen / 2, [0, 0, -1]);
+    // profil rectangle |e| × |s|, extrudé de l'épaisseur vers −Z local (sous le rampant)
+    const forme = rectExtrude(w, ctx, eLen, sLen, t.epaisseur, eLen / 2, flip ? -sLen / 2 : sLen / 2, [0, 0, -1]);
     const toit = w.add(`IFCSLAB('${ifcGuid()}',$,${T("Pan de toiture")},$,$,${w.ref(place)},${w.ref(forme)},$,.ROOF.)`);
     contenu.push(toit);
   }
@@ -203,11 +212,13 @@ export function buildBimPlanDXF(model: BimModel): string {
   const S = 100; // mètres → centimètres (cohérent avec les autres exports DXF)
   const N = (v: number) => (v * S).toFixed(3);
 
+  // Les paires reçues sont (x, z) monde Three.js (Y-up main droite) : vu de
+  // dessus, le plan papier correct est (x, −z) — sans quoi le plan est en miroir.
   const lwpoly = (layer: string, pts: [number, number][]) =>
     `0\nLWPOLYLINE\n8\n${layer}\n90\n${pts.length}\n70\n1\n` +
-    pts.map(([x, y]) => `10\n${N(x)}\n20\n${N(y)}\n`).join("");
+    pts.map(([x, y]) => `10\n${N(x)}\n20\n${N(-y)}\n`).join("");
   const line = (layer: string, a: [number, number], b: [number, number]) =>
-    `0\nLINE\n8\n${layer}\n10\n${N(a[0])}\n20\n${N(a[1])}\n30\n0\n11\n${N(b[0])}\n21\n${N(b[1])}\n31\n0\n`;
+    `0\nLINE\n8\n${layer}\n10\n${N(a[0])}\n20\n${N(-a[1])}\n30\n0\n11\n${N(b[0])}\n21\n${N(-b[1])}\n31\n0\n`;
 
   let ent = "";
   // Murs : empreinte rectangulaire (nu selon décalage) — plan = (monde x, monde z)
