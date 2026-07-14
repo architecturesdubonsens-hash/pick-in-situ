@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BC-Archi · Redressement de façade 2D</title>
+<style>
+  :root{ --navy:#1e3a5f; --navy2:#162d4a; --orange:#F97316; --light:#f1f5f9; --line:#cbd5e1; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a; background:#0b1622; }
+  header{ background:var(--navy); color:#fff; padding:10px 16px; border-bottom:3px solid var(--orange); display:flex; align-items:center; gap:12px; }
+  header .t{ font-weight:800; letter-spacing:.5px; }
+  header .s{ font-size:12px; color:#93c5fd; }
+  .wrap{ display:grid; grid-template-columns:340px 1fr; gap:0; height:calc(100vh - 51px); }
+  .panel{ background:#0f1d2e; color:#e2e8f0; padding:14px; overflow-y:auto; border-right:1px solid #1e3a5f; }
+  .panel h3{ font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:#93c5fd; margin:16px 0 8px; }
+  .panel h3:first-child{ margin-top:0; }
+  .stage{ position:relative; background:#0b1622; overflow:hidden; }
+  #imgCanvas,#outCanvas{ position:absolute; inset:0; margin:auto; max-width:100%; max-height:100%; }
+  .tabs{ display:flex; gap:4px; margin-bottom:8px; }
+  .tab{ flex:1; text-align:center; padding:6px; font-size:12px; border-radius:6px 6px 0 0; background:#16283c; color:#93c5fd; cursor:pointer; border:1px solid #1e3a5f; border-bottom:none; }
+  .tab.active{ background:#0b1622; color:#fff; font-weight:700; }
+  .btn{ display:block; width:100%; padding:8px; margin:6px 0; border:none; border-radius:7px; background:#1e3a5f; color:#fff; font-size:12.5px; cursor:pointer; }
+  .btn:hover{ background:#274a73; }
+  .btn.primary{ background:var(--orange); font-weight:700; }
+  .btn.ghost{ background:transparent; border:1px solid #274a73; }
+  .btn:disabled{ opacity:.45; cursor:not-allowed; }
+  label{ font-size:11.5px; color:#cbd5e1; display:block; margin:8px 0 3px; }
+  input[type=text],input[type=number]{ width:100%; padding:6px 8px; border-radius:6px; border:1px solid #274a73; background:#0b1622; color:#fff; font-size:12px; }
+  .row2{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .imglist{ display:flex; flex-wrap:wrap; gap:5px; }
+  .imgchip{ position:relative; width:64px; height:48px; border-radius:5px; overflow:hidden; border:2px solid transparent; cursor:pointer; }
+  .imgchip.active{ border-color:var(--orange); }
+  .imgchip img{ width:100%; height:100%; object-fit:cover; }
+  .imgchip .x{ position:absolute; top:0; right:0; background:rgba(192,57,43,.9); color:#fff; width:15px; height:15px; font-size:10px; line-height:15px; text-align:center; cursor:pointer; }
+  .pts{ font-size:11px; }
+  .pts .p{ display:grid; grid-template-columns:18px 1fr 1fr; gap:5px; align-items:center; margin:4px 0; }
+  .pts .p .idx{ width:18px; height:18px; border-radius:50%; text-align:center; line-height:18px; color:#fff; font-weight:700; font-size:10px; }
+  .pts input{ padding:3px 5px; font-size:11px; }
+  .hint{ font-size:10.5px; color:#94a3b8; line-height:1.4; margin:4px 0; }
+  .status{ font-size:11px; margin-top:6px; min-height:14px; }
+  .toolbar{ position:absolute; top:8px; left:8px; display:flex; gap:6px; z-index:5; }
+  .toolbar .b{ background:#0f1d2eee; color:#e2e8f0; border:1px solid #274a73; border-radius:6px; padding:5px 9px; font-size:11.5px; cursor:pointer; }
+  .toolbar .b.on{ background:var(--orange); color:#fff; border-color:var(--orange); }
+</style>
+</head>
+<body>
+<header>
+  <div class="t">BC-Archi · Redressement de façade 2D</div>
+  <div class="s">Assemblage d'élévation à l'échelle — sans nuage de points</div>
+</header>
+<div class="wrap">
+  <div class="panel">
+    <h3>1 · Photos</h3>
+    <button class="btn" onclick="document.getElementById('file').click()">📁 Charger des photos</button>
+    <input type="file" id="file" accept="image/*" multiple style="display:none">
+    <div class="imglist" id="imglist"></div>
+    <div class="hint">Redresse chaque photo puis assemble-les dans le même repère métrique.</div>
+
+    <h3>2 · Échelle du repère</h3>
+    <label>Résolution (pixels par mètre)</label>
+    <input type="number" id="ppm" value="80" min="10" max="400">
+    <div class="hint">80 px/m ≈ traçage confortable. Sert aussi à l'export (DPI = ppm × 25.4).</div>
+
+    <h3>3 · Cotes de référence (IGN)</h3>
+    <label>Adresse ou parcelle (ex: "12 rue X, Lherm" ou "31299 0A 2176")</label>
+    <input type="text" id="ign-q" placeholder="Adresse / réf. parcelle">
+    <button class="btn ghost" onclick="fetchIGN()">📐 Récupérer longueur + hauteur BDTOPO</button>
+    <div class="row2">
+      <div><label>Longueur façade (m)</label><input type="number" id="fac-l" step="0.1" placeholder="—"></div>
+      <div><label>Hauteur bât. (m)</label><input type="number" id="fac-h" step="0.1" placeholder="—"></div>
+    </div>
+    <div class="status" id="ign-status"></div>
+
+    <h3>4 · Points de contrôle (photo active)</h3>
+    <div class="hint">Clique 4 points sur la photo (coins d'un rectangle réel : baie, façade…), puis renseigne leurs coordonnées façade en mètres (X = horizontal, Y = vertical, origine en bas-gauche).</div>
+    <div class="pts" id="pts"></div>
+    <button class="btn ghost" onclick="autoFillCorners()">Coins façade = (0,0)(L,0)(L,H)(0,H)</button>
+
+    <h3>5 · Assemblage</h3>
+    <button class="btn primary" onclick="autoAssembleAll()" style="background:#8b5cf6; margin-bottom:8px;">🪄 Assembler automatiquement</button>
+    <button class="btn primary" onclick="rectifyActive()">↳ Redresser & placer la photo active (Manuel)</button>
+    <button class="btn ghost" onclick="clearAssembly()">Vider l'assemblage</button>
+    <div class="status" id="asm-status"></div>
+
+    <h3>6 · Export</h3>
+    <button class="btn" onclick="exportPNG()">💾 PNG (échelle intégrée)</button>
+    <button class="btn" onclick="exportDXF()">📐 DXF (cadre 1:1 mm + grille)</button>
+    <button class="btn ghost" onclick="window.print()">🖨️ Imprimer / PDF</button>
+    <div class="hint">Le DXF est un gabarit métrique 1:1 (cadre + grille 1 m + cotes) à importer dans BricsCAD/AutoCAD ; attachez le PNG en fond, calez-le sur le cadre, et tracez l'élévation.</div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="tabs" style="position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:6;width:260px">
+      <div class="tab active" id="tab-img" onclick="showView('img')">Photo + points</div>
+      <div class="tab" id="tab-out" onclick="showView('out')">Assemblage</div>
+    </div>
+    <div class="toolbar" id="tb-img">
+      <div class="b on" id="btn-pick" onclick="togglePick()">🎯 Placer les points</div>
+      <div class="b" onclick="resetPts()">↺ Effacer les points</div>
+    </div>
+    <canvas id="imgCanvas"></canvas>
+    <canvas id="outCanvas" style="display:none"></canvas>
+  </div>
+</div>
+
+<script>
+// ── État ────────────────────────────────────────────────────────────────────
+const layers = [];          // { img, name, src:[{x,y}], world:[{x,y}] }
+let active = -1;
+let picking = true;
+let view = 'img';
+const $ = id => document.getElementById(id);
+const PT_COLORS = ['#ef4444','#22c55e','#3b82f6','#f59e0b'];
+
+// ── Homographie (DLT 4 points, résolution 8×8 Gauss) ────────────────────────
+// Renvoie H (row-major 9) tel que dst ~ H · src (coordonnées homogènes).
+function homography(src, dst){
+  const A=[], b=[];
+  for(let i=0;i<4;i++){
+    const {x,y}=src[i], {x:X,y:Y}=dst[i];
+    A.push([x,y,1,0,0,0,-x*X,-y*X]); b.push(X);
+    A.push([0,0,0,x,y,1,-x*Y,-y*Y]); b.push(Y);
+  }
+  const h=solve(A,b);            // 8 inconnues
+  return [h[0],h[1],h[2], h[3],h[4],h[5], h[6],h[7],1];
+}
+function solve(A,b){
+  const n=b.length, M=A.map((r,i)=>[...r,b[i]]);
+  for(let c=0;c<n;c++){
+    let piv=c; for(let r=c+1;r<n;r++) if(Math.abs(M[r][c])>Math.abs(M[piv][c])) piv=r;
+    [M[c],M[piv]]=[M[piv],M[c]];
+    const d=M[c][c]||1e-12;
+    for(let k=c;k<=n;k++) M[c][k]/=d;
+    for(let r=0;r<n;r++){ if(r===c) continue; const f=M[r][c]; for(let k=c;k<=n;k++) M[r][k]-=f*M[c][k]; }
+  }
+  return M.map(r=>r[n]);
+}
+function applyH(H,x,y){
+  const w=H[6]*x+H[7]*y+H[8];
+  return { x:(H[0]*x+H[1]*y+H[2])/w, y:(H[3]*x+H[4]*y+H[5])/w };
+}
+
+// ── Chargement des photos ───────────────────────────────────────────────────
+$('file').addEventListener('change', e=>{
+  for(const f of e.target.files){
+    const img=new Image();
+    img.onload=()=>{ layers.push({img,name:f.name,src:[],world:[{x:0,y:0},{x:0,y:0},{x:0,y:0},{x:0,y:0}]}); renderList(); if(active<0) setActive(layers.length-1); };
+    img.src=URL.createObjectURL(f);
+  }
+  e.target.value='';
+});
+function renderList(){
+  const box=$('imglist'); box.innerHTML='';
+  layers.forEach((L,i)=>{
+    const c=document.createElement('div'); c.className='imgchip'+(i===active?' active':'');
+    const im=document.createElement('img'); im.src=L.img.src; c.appendChild(im);
+    c.onclick=()=>setActive(i);
+    const x=document.createElement('div'); x.className='x'; x.textContent='✕';
+    x.onclick=ev=>{ ev.stopPropagation(); layers.splice(i,1); if(active>=layers.length) active=layers.length-1; renderList(); drawImg(); renderPts(); };
+    c.appendChild(x); box.appendChild(c);
+  });
+}
+function setActive(i){ active=i; renderList(); drawImg(); renderPts(); }
+
+// ── Vue photo + saisie des points ───────────────────────────────────────────
+const ic=$('imgCanvas'), octx=$('outCanvas');
+// Ne touche QUE la taille CSS (affichage) — jamais cv.width/height, qui effacerait
+// le contenu déjà dessiné (c'était le bug : canvas remis à zéro après composition).
+function fitCSS(cv){
+  const st=$('stage').getBoundingClientRect();
+  const s=Math.min((st.width-20)/cv.width,(st.height-20)/cv.height,1);
+  cv.style.width=(cv.width*s)+'px'; cv.style.height=(cv.height*s)+'px';
+  return s;
+}
+function drawImg(){
+  if(active<0){ ic.width=10; ic.height=10; return; }
+  const L=layers[active];
+  ic.width=L.img.naturalWidth; ic.height=L.img.naturalHeight;   // backing store
+  const g=ic.getContext('2d');
+  fitCSS(ic);
+  g.drawImage(L.img,0,0);
+  L.src.forEach((p,i)=>{
+    g.beginPath(); g.arc(p.x,p.y,Math.max(6,ic.width/120),0,7); g.fillStyle=PT_COLORS[i]; g.fill();
+    g.lineWidth=2; g.strokeStyle='#fff'; g.stroke();
+    g.fillStyle='#fff'; g.font=`bold ${Math.max(12,ic.width/60)}px Arial`; g.fillText(i+1,p.x+8,p.y-8);
+  });
+  if(L.src.length===4){
+    g.beginPath(); g.moveTo(L.src[0].x,L.src[0].y);
+    for(let i=1;i<4;i++) g.lineTo(L.src[i].x,L.src[i].y);
+    g.closePath(); g.strokeStyle='#F97316'; g.lineWidth=2; g.stroke();
+  }
+}
+ic.addEventListener('pointerdown', e=>{
+  if(!picking || active<0) return;
+  const L=layers[active]; if(L.src.length>=4) L.src=[];
+  const r=ic.getBoundingClientRect();
+  const x=(e.clientX-r.left)/r.width*ic.width, y=(e.clientY-r.top)/r.height*ic.height;
+  L.src.push({x,y}); drawImg(); renderPts();
+});
+function togglePick(){ picking=!picking; $('btn-pick').classList.toggle('on',picking); }
+function resetPts(){ if(active<0) return; layers[active].src=[]; drawImg(); renderPts(); }
+
+function renderPts(){
+  const box=$('pts'); box.innerHTML='';
+  if(active<0){ box.innerHTML='<div class="hint">Chargez une photo.</div>'; return; }
+  const L=layers[active];
+  for(let i=0;i<4;i++){
+    const placed=L.src[i];
+    const row=document.createElement('div'); row.className='p';
+    row.innerHTML=`<div class="idx" style="background:${PT_COLORS[i]}">${i+1}</div>`;
+    const xi=document.createElement('input'); xi.type='number'; xi.step='0.01'; xi.placeholder='X (m)'; xi.value=L.world[i].x??'';
+    const yi=document.createElement('input'); yi.type='number'; yi.step='0.01'; yi.placeholder='Y (m)'; yi.value=L.world[i].y??'';
+    xi.oninput=()=>L.world[i].x=parseFloat(xi.value);
+    yi.oninput=()=>L.world[i].y=parseFloat(yi.value);
+    xi.style.opacity=placed?1:.5; yi.style.opacity=placed?1:.5;
+    row.appendChild(xi); row.appendChild(yi); box.appendChild(row);
+  }
+}
+function autoFillCorners(){
+  if(active<0) return;
+  const L=parseFloat($('fac-l').value), H=parseFloat($('fac-h').value);
+  if(!L||!H){ $('asm-status').textContent='Renseignez longueur + hauteur d’abord.'; $('asm-status').style.color='#fca5a5'; return; }
+  // ordre attendu des clics : bas-gauche, bas-droite, haut-droite, haut-gauche
+  layers[active].world=[{x:0,y:0},{x:L,y:0},{x:L,y:H},{x:0,y:H}];
+  renderPts();
+  $('asm-status').style.color='#93c5fd';
+  $('asm-status').textContent='Coins = (0,0)(L,0)(L,H)(0,H). Cliquez les points dans cet ordre : bas-G, bas-D, haut-D, haut-G.';
+}
+
+// ── Redressement + composition dans le repère mètres ────────────────────────
+let asmBounds=null;   // {minx,miny,maxx,maxy} en mètres
+function rectifyActive(){
+  if(active<0) return;
+  const L=layers[active], ppm=parseFloat($('ppm').value)||80;
+  if(L.src.length!==4 || L.world.some(w=>isNaN(w.x)||isNaN(w.y))){
+    $('asm-status').style.color='#fca5a5';
+    $('asm-status').textContent='Il faut 4 points cliqués + leurs 4 coordonnées (X,Y) en mètres.'; return;
+  }
+  // repère écran de l'assemblage : Xpx = x*ppm ; Ypx = (maxY - y)*ppm (Y vers le haut)
+  // 1) étendre les bornes de l'assemblage
+  const xs=L.world.map(w=>w.x), ys=L.world.map(w=>w.y);
+  const b={minx:Math.min(...xs),maxx:Math.max(...xs),miny:Math.min(...ys),maxy:Math.max(...ys)};
+  if(asmBounds){ b.minx=Math.min(b.minx,asmBounds.minx); b.maxx=Math.max(b.maxx,asmBounds.maxx); b.miny=Math.min(b.miny,asmBounds.miny); b.maxy=Math.max(b.maxy,asmBounds.maxy); }
+  // recréer le canvas assemblage si les bornes changent (on redessine tout)
+  const changed = !asmBounds || b.minx<asmBounds.minx||b.maxx>asmBounds.maxx||b.miny<asmBounds.miny||b.maxy>asmBounds.maxy;
+  asmBounds=b;
+  L.placed=true;
+  if(changed) redrawAll(ppm); else compositeLayer(L, ppm);
+  showView('out');
+  $('asm-status').style.color='#86efac';
+  const nP=layers.filter(l=>l.placed).length;
+  $('asm-status').textContent=`✓ ${nP} photo(s) assemblée(s). Repère ${(b.maxx-b.minx).toFixed(1)}×${(b.maxy-b.miny).toFixed(1)} m.`;
+}
+function worldToPx(x,y,ppm){ return { X:(x-asmBounds.minx)*ppm, Y:(asmBounds.maxy-y)*ppm }; }
+function redrawAll(ppm){
+  const W=Math.ceil((asmBounds.maxx-asmBounds.minx)*ppm), H=Math.ceil((asmBounds.maxy-asmBounds.miny)*ppm);
+  octx.width=W; octx.height=H;
+  const g=octx.getContext('2d'); g.fillStyle='#fff'; g.fillRect(0,0,W,H);
+  layers.filter(l=>l.placed).forEach(l=>compositeLayer(l,ppm,true));
+  drawGrid(ppm);
+  fitOut();
+}
+function compositeLayer(L, ppm, skipFit){
+  // image source en ImageData
+  const sc=document.createElement('canvas'); sc.width=L.img.naturalWidth; sc.height=L.img.naturalHeight;
+  const sg=sc.getContext('2d'); sg.drawImage(L.img,0,0);
+  const sd=sg.getImageData(0,0,sc.width,sc.height).data, sw=sc.width, sh=sc.height;
+  // quad destination en pixels de l'assemblage
+  const dst=L.world.map(w=>{ const p=worldToPx(w.x,w.y,ppm); return {x:p.X,y:p.Y}; });
+  // homographie dst→src (mapping inverse pour échantillonner)
+  const Hi=homography(dst, L.src);
+  const g=octx.getContext('2d');
+  const xs=dst.map(p=>p.x), ys=dst.map(p=>p.y);
+  const x0=Math.max(0,Math.floor(Math.min(...xs))), x1=Math.min(octx.width,Math.ceil(Math.max(...xs)));
+  const y0=Math.max(0,Math.floor(Math.min(...ys))), y1=Math.min(octx.height,Math.ceil(Math.max(...ys)));
+  const out=g.getImageData(x0,y0,x1-x0,y1-y0), od=out.data;
+  for(let y=y0;y<y1;y++){
+    for(let x=x0;x<x1;x++){
+      const s=applyH(Hi,x+.5,y+.5);
+      if(s.x<0||s.y<0||s.x>=sw-1||s.y>=sh-1) continue;
+      // bilinéaire
+      const ix=Math.floor(s.x), iy=Math.floor(s.y), fx=s.x-ix, fy=s.y-iy;
+      const i00=(iy*sw+ix)*4, i10=i00+4, i01=i00+sw*4, i11=i01+4;
+      const oi=((y-y0)*(x1-x0)+(x-x0))*4;
+      for(let c=0;c<3;c++){
+        od[oi+c]= (sd[i00+c]*(1-fx)+sd[i10+c]*fx)*(1-fy) + (sd[i01+c]*(1-fx)+sd[i11+c]*fx)*fy;
+      }
+      od[oi+3]=255;
+    }
+  }
+  g.putImageData(out,x0,y0);
+  if(!skipFit){ drawGrid(ppm); fitOut(); }
+}
+function drawGrid(ppm){
+  const g=octx.getContext('2d'); g.save();
+  g.strokeStyle='rgba(30,58,95,.25)'; g.fillStyle='#1e3a5f'; g.font='11px Arial'; g.lineWidth=1;
+  for(let m=Math.ceil(asmBounds.minx); m<=asmBounds.maxx; m++){ const X=(m-asmBounds.minx)*ppm; g.beginPath(); g.moveTo(X,0); g.lineTo(X,octx.height); g.stroke(); if(m%1===0) g.fillText(m+' m',X+2,12); }
+  for(let m=Math.ceil(asmBounds.miny); m<=asmBounds.maxy; m++){ const Y=(asmBounds.maxy-m)*ppm; g.beginPath(); g.moveTo(0,Y); g.lineTo(octx.width,Y); g.stroke(); g.fillText(m+' m',2,Y-2); }
+  
+  // Échelle graphique professionnelle (en bas à gauche)
+  const W = asmBounds.maxx - asmBounds.minx;
+  let scaleMeters = 1; // par défaut 1m
+  if (W > 20) scaleMeters = 5;
+  if (W > 50) scaleMeters = 10;
+  
+  const scalePx = scaleMeters * ppm;
+  const sx = 20, sy = octx.height - 30; // position
+  
+  // Fond blanc pour la lisibilité
+  g.fillStyle = 'rgba(255,255,255,0.8)';
+  g.fillRect(sx - 10, sy - 20, scalePx + 20, 35);
+  
+  // Contour de la barre
+  g.lineWidth = 1;
+  g.strokeStyle = '#000';
+  g.strokeRect(sx, sy, scalePx, 8);
+  
+  // Blocs alternés (noir/blanc) tous les mètres (ou tous les 2m/5m si très grand)
+  const subdivisions = scaleMeters === 1 ? 4 : scaleMeters; 
+  const subPx = scalePx / subdivisions;
+  const subVal = scaleMeters / subdivisions;
+  
+  for(let i=0; i<subdivisions; i++) {
+    g.fillStyle = i % 2 === 0 ? '#000' : '#fff';
+    g.fillRect(sx + i*subPx, sy, subPx, 8);
+  }
+  
+  // Textes
+  g.fillStyle = '#000';
+  g.font = 'bold 12px Arial';
+  g.textAlign = 'center';
+  g.fillText('0', sx, sy - 6);
+  g.fillText(scaleMeters + ' m', sx + scalePx, sy - 6);
+  
+  // Milieu
+  if(subdivisions > 1 && scaleMeters > 1) {
+    g.fillText((scaleMeters/2) + ' m', sx + scalePx/2, sy - 6);
+  } else if (scaleMeters === 1) {
+    g.fillText('50 cm', sx + scalePx/2, sy - 6);
+  }
+  
+  g.restore();
+}
+function fitOut(){ fitCSS(octx); }
+// ── Auto-Assemblage ─────────────────────────────────────────────────────────
+async function autoAssembleAll() {
+  if(!window.facadeSegment) {
+    $('asm-status').style.color='#fca5a5';
+    $('asm-status').textContent='Veuillez d\'abord récupérer la longueur + hauteur BDTOPO (Étape 3).';
+    return;
+  }
+  const L = parseFloat($('fac-l').value);
+  const H = parseFloat($('fac-h').value);
+  if(!L || !H) {
+    $('asm-status').style.color='#fca5a5';
+    $('asm-status').textContent='Renseignez longueur + hauteur d’abord.';
+    return;
+  }
+  
+  const R=6378137;
+  const {a, b, length: lenAB} = window.facadeSegment; // a, b sont [lon, lat]
+  const coslat = Math.cos(a[1]*Math.PI/180);
+  
+  // Vecteur AB en mètres (approx locale)
+  const dxAB = (b[0]-a[0]) * Math.PI/180 * R * coslat;
+  const dyAB = (b[1]-a[1]) * Math.PI/180 * R;
+  
+  let successCount = 0;
+  for(let i=0; i<layers.length; i++) {
+    const layer = layers[i];
+    const m = layer.meta;
+    if(!m || !m.lat || !m.lon) continue;
+    
+    // Vecteur AP en mètres
+    const dxAP = (m.lon - a[0]) * Math.PI/180 * R * coslat;
+    const dyAP = (m.lat - a[1]) * Math.PI/180 * R;
+    
+    // Projection de AP sur AB
+    const dot = (dxAP * dxAB + dyAP * dyAB) / (lenAB * lenAB);
+    
+    // Position X de la photo sur la façade (0 = point A, L = point B)
+    const px = dot * L; 
+    
+    // Distance orthogonale de la photo à la façade (en mètres)
+    const cx = dxAB * dot;
+    const cy = dyAB * dot;
+    const distMeters = Math.hypot(dxAP - cx, dyAP - cy);
+    
+    // Si la photo est trop proche ou trop loin, on ignore pour éviter un crash
+    if(distMeters < 0.2 || distMeters > 100) continue;
+    
+    // Calcul de l'emprise visuelle (HFOV)
+    let hfov = 70 * Math.PI / 180; // par défaut 70°
+    if(m.focal && m.focal > 10 && m.focal < 100) {
+      hfov = 2 * Math.atan(36 / (2 * m.focal));
+    }
+    const widthMeters = 2 * distMeters * Math.tan(hfov / 2);
+    const heightMeters = widthMeters * (layer.img.naturalHeight / layer.img.naturalWidth);
+    
+    // Position Y
+    // Sans altimètre fiable, on centre de façon heuristique
+    const py = Math.min(Math.max(1.6 + heightMeters/2, H/2), H - heightMeters/2);
+    
+    // Coordonnées cibles (world) en mètres
+    const w = widthMeters, h_img = heightMeters;
+    layer.world = [
+      {x: px - w/2, y: py - h_img/2},
+      {x: px + w/2, y: py - h_img/2},
+      {x: px + w/2, y: py + h_img/2},
+      {x: px - w/2, y: py + h_img/2}
+    ];
+    
+    // Coordonnées source (pixels image entière)
+    const iw = layer.img.naturalWidth, ih = layer.img.naturalHeight;
+    layer.src = [
+      {x: 0, y: ih},
+      {x: iw, y: ih},
+      {x: iw, y: 0},
+      {x: 0, y: 0}
+    ];
+    
+    layer.placed = true;
+    successCount++;
+  }
+  
+  if(successCount > 0) {
+    const ppm = parseFloat($('ppm').value)||80;
+    // On calcule les bornes globales englobant toutes les photos placées
+    let allXs = [0, L], allYs = [0, H]; // On garantit au moins 0..L et 0..H
+    layers.filter(l=>l.placed).forEach(l => {
+      l.world.forEach(w => { allXs.push(w.x); allYs.push(w.y); });
+    });
+    const b = {
+      minx: Math.min(...allXs),
+      maxx: Math.max(...allXs),
+      miny: Math.min(...allYs),
+      maxy: Math.max(...allYs)
+    };
+    if(asmBounds) {
+      b.minx = Math.min(b.minx, asmBounds.minx);
+      b.maxx = Math.max(b.maxx, asmBounds.maxx);
+      b.miny = Math.min(b.miny, asmBounds.miny);
+      b.maxy = Math.max(b.maxy, asmBounds.maxy);
+    }
+    asmBounds = b;
+    redrawAll(ppm);
+    showView('out');
+    $('asm-status').style.color='#86efac';
+    $('asm-status').textContent=`✓ Auto-assemblage : ${successCount} photo(s) placée(s). (${layers.length - successCount} ignorée(s))`;
+  } else {
+    $('asm-status').style.color='#fca5a5';
+    $('asm-status').textContent='Aucune photo avec GPS valide/cohérent trouvée pour l\'auto-assemblage.';
+  }
+}
+
+function clearAssembly(){ layers.forEach(l=>l.placed=false); asmBounds=null; octx.width=10; octx.height=10; $('asm-status').textContent=''; showView('img'); }
+
+// ── Vues ────────────────────────────────────────────────────────────────────
+function showView(v){
+  view=v;
+  $('tab-img').classList.toggle('active',v==='img');
+  $('tab-out').classList.toggle('active',v==='out');
+  ic.style.display=v==='img'?'block':'none';
+  octx.style.display=v==='out'?'block':'none';
+  $('tb-img').style.display=v==='img'?'flex':'none';
+  if(v==='img') drawImg(); else if(asmBounds) fitOut();
+}
+
+// ── IGN : longueur façade + hauteur bâtiment ────────────────────────────────
+async function fetchIGN(){
+  const q=$('ign-q').value.trim(); if(!q){ return; }
+  const st=$('ign-status'); st.style.color='#93c5fd'; st.textContent='Recherche IGN…';
+  try{
+    let lon,lat;
+    const parc=q.match(/(\d{5})\s+([0-9A-Z]{1,2})\s+(\d{1,4})/i);
+    if(parc){
+      const [_,insee,sec,num]=parc;
+      const u=`https://apicarto.ign.fr/api/cadastre/parcelle?code_insee=${insee}&section=${sec.toUpperCase()}&numero=${num.padStart(4,'0')}`;
+      const d=await fetch(u).then(r=>r.json());
+      const c=d.features?.[0]?.geometry?.coordinates?.[0]?.[0] || d.features?.[0]?.geometry?.coordinates?.[0];
+      lon=c.reduce((s,p)=>s+p[0],0)/c.length; lat=c.reduce((s,p)=>s+p[1],0)/c.length;
+    } else {
+      const g=await fetch(`https://data.geopf.fr/geocodage/search/?q=${encodeURIComponent(q)}&limit=1`).then(r=>r.json());
+      [lon,lat]=g.features[0].geometry.coordinates;
+    }
+    const dd=0.0006;
+    const bb=`${lat-dd},${lon-dd},${lat+dd},${lon+dd}`;
+    const wfs=`https://data.geopf.fr/wfs/ows?SERVICE=WFS&VERSION=2.0.0&REQUEST=GetFeature&TYPENAMES=BDTOPO_V3:batiment&SRSNAME=EPSG:4326&BBOX=${bb}&OUTPUTFORMAT=application/json&COUNT=30`;
+    const bat=await fetch(wfs).then(r=>r.json());
+    // bâtiment le plus proche du point
+    let best=null,bd=1e9;
+    for(const f of (bat.features||[])){
+      const g=f.geometry; const ring=g.type==='MultiPolygon'?g.coordinates[0][0]:g.coordinates[0];
+      const cx=ring.reduce((s,p)=>s+p[0],0)/ring.length, cy=ring.reduce((s,p)=>s+p[1],0)/ring.length;
+      const dist=(cx-lon)**2+(cy-lat)**2;
+      if(dist<bd){ bd=dist; best={f,ring}; }
+    }
+    if(!best) throw new Error('aucun bâtiment BDTOPO à ce point');
+    // longueur = plus longue arête du polygone (façade principale) ; hauteur = attribut
+    const R=6378137, coslat=Math.cos(lat*Math.PI/180);
+    let maxLen=0, bestSeg=null;
+    for(let i=0;i<best.ring.length-1;i++){
+      const a=best.ring[i], b=best.ring[i+1];
+      const dx=(b[0]-a[0])*Math.PI/180*R*coslat, dy=(b[1]-a[1])*Math.PI/180*R;
+      const len=Math.hypot(dx,dy);
+      if(len>maxLen){ maxLen=len; bestSeg={a, b, length:len}; }
+    }
+    window.facadeSegment = bestSeg; // Stocker globalement pour l'auto-assemblage
+    const h=best.f.properties.hauteur;
+    $('fac-l').value=maxLen.toFixed(1);
+    if(h) $('fac-h').value=(+h).toFixed(1);
+    st.style.color='#86efac';
+    st.textContent=`✓ Façade ~${maxLen.toFixed(1)} m · hauteur ${h?h+' m':'(absente)'}. Ajustez si besoin.`;
+  }catch(e){ st.style.color='#fca5a5'; st.textContent='IGN : '+e.message; }
+}
+
+// ── Export ──────────────────────────────────────────────────────────────────
+function exportPNG(){
+  if(!asmBounds){ return; }
+  const a=document.createElement('a');
+  a.download=`facade_redressee_${(asmBounds.maxx-asmBounds.minx).toFixed(1)}x${(asmBounds.maxy-asmBounds.miny).toFixed(1)}m_${$('ppm').value}pxm.png`;
+  a.href=octx.toDataURL('image/png'); a.click();
+}
+// DXF R12 minimal (LINE + TEXT), unités mm, échelle 1:1 : cadre façade + grille
+// 1 m + cotes. Gabarit à importer, PNG attaché en fond dessus.
+function buildDXF(){
+  if(!asmBounds) return null;
+  const Lm=asmBounds.maxx-asmBounds.minx, Hm=asmBounds.maxy-asmBounds.miny;
+  const L=Lm*1000, H=Hm*1000;
+  const line=(x1,y1,x2,y2,lay)=>`0\nLINE\n8\n${lay}\n10\n${x1.toFixed(1)}\n20\n${y1.toFixed(1)}\n11\n${x2.toFixed(1)}\n21\n${y2.toFixed(1)}\n`;
+  const text=(x,y,h,str,lay)=>`0\nTEXT\n8\n${lay}\n10\n${x.toFixed(1)}\n20\n${y.toFixed(1)}\n40\n${h}\n1\n${str}\n`;
+  let s='0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n';
+  s+=line(0,0,L,0,'FACADE_CADRE')+line(L,0,L,H,'FACADE_CADRE')+line(L,H,0,H,'FACADE_CADRE')+line(0,H,0,0,'FACADE_CADRE');
+  for(let m=1;m<Lm;m++) s+=line(m*1000,0,m*1000,H,'GRILLE');
+  for(let m=1;m<Hm;m++) s+=line(0,m*1000,L,m*1000,'GRILLE');
+  s+=text(L/2-500,-300,200,`Longueur ${Lm.toFixed(2)} m`,'COTES');
+  s+=text(-1400,H/2,200,`Hauteur ${Hm.toFixed(2)} m`,'COTES');
+  s+='0\nENDSEC\n0\nEOF\n';
+  return s;
+}
+function exportDXF(){
+  const s=buildDXF(); if(!s){ $('asm-status').style.color='#fca5a5'; $('asm-status').textContent='Assemblez d’abord au moins une photo.'; return; }
+  const a=document.createElement('a');
+  a.download=`facade_cadre_${(asmBounds.maxx-asmBounds.minx).toFixed(1)}x${(asmBounds.maxy-asmBounds.miny).toFixed(1)}m.dxf`;
+  a.href=URL.createObjectURL(new Blob([s],{type:'application/dxf'})); a.click();
+}
+
+// Réception des photos depuis le parent (intégration iframe dans photo-relevé) :
+// on charge le tableau de File tel quel comme calques.
+window.addEventListener('message', ev=>{
+  if(ev.data?.type!=='facade2d-load' || !Array.isArray(ev.data.payload)) return;
+  layers.length=0; active=-1;
+  let pending=ev.data.payload.length;
+  ev.data.payload.forEach(item=>{
+    const f = item.file;
+    const meta = item.meta || {};
+    const img=new Image();
+    img.onload=()=>{ layers.push({img,name:f.name||'photo',meta,src:[],world:[{x:0,y:0},{x:0,y:0},{x:0,y:0},{x:0,y:0}]}); if(--pending===0){ renderList(); if(layers.length)setActive(0); } };
+    img.src=URL.createObjectURL(f);
+  });
+});
+addEventListener('resize', ()=>{ if(view==='img') drawImg(); else if(asmBounds) fitOut(); });
+renderPts();
+</script>
+</body>
+</html>

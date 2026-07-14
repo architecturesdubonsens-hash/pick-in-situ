@@ -209,14 +209,23 @@ export default function UploadPage() {
         )}
       </div>
 
-      {/* Source alternative : relevé photogrammétrique BC-Archi */}
+      {/* Source alternative : relevé photogrammétrique */}
       <div className="mb-6">
+        <a
+          href="/photo-releve.html"
+          target="_blank"
+          rel="noopener"
+          className="block text-sm font-medium underline-offset-2 hover:underline mb-2"
+          style={{ color: "var(--navy)" }}
+        >
+          📷 …ou créer un relevé photogrammétrique à partir de photos →
+        </a>
         <button
           onClick={openBcList}
           className="text-sm font-medium underline-offset-2 hover:underline"
           style={{ color: "var(--navy)" }}
         >
-          📡 …ou importer le mesh d&apos;un relevé photogrammétrique BC-Archi {bcOpen ? "▴" : "▾"}
+          📡 …ou importer le mesh d&apos;un relevé photogrammétrique existant {bcOpen ? "▴" : "▾"}
         </button>
         {bcOpen && (
           <div className="mt-3 border border-slate-200 rounded-xl divide-y divide-slate-100 max-h-64 overflow-y-auto bg-white">

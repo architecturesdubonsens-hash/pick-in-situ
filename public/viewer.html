@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BC-Archi — Visualiseur nuage de points</title>
+<style>
+  :root { --bleu:#1e3a5f; --bleu2:#162d4a; --orange:#F97316; --gray:#64748b; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { height:100%; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#0b1622; color:#e2e8f0; overflow:hidden; }
+  #app { position:fixed; inset:0; }
+  canvas { display:block; }
+  header { position:fixed; top:0; left:0; right:0; height:52px; background:var(--bleu); border-bottom:3px solid var(--orange);
+           display:flex; align-items:center; padding:0 16px; gap:12px; z-index:10; }
+  header .t { font-weight:700; font-size:15px; }
+  header .s { font-size:12px; color:#93c5fd; }
+  #panel { position:fixed; top:64px; left:12px; z-index:10; background:rgba(22,45,74,.92); backdrop-filter:blur(6px);
+           border:1px solid #274b73; border-radius:10px; padding:12px; width:250px; font-size:13px; }
+  #panel h3 { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#93c5fd; margin-bottom:8px; }
+  .btn { width:100%; border:1px solid #274b73; background:#1e3a5f; color:#e2e8f0; padding:8px 10px; border-radius:7px;
+         cursor:pointer; font-size:13px; margin-bottom:6px; text-align:left; }
+  .btn:hover { border-color:var(--orange); }
+  .btn.active { background:var(--orange); border-color:var(--orange); color:#fff; font-weight:600; }
+  .row { display:flex; gap:6px; align-items:center; margin:6px 0; }
+  .row label { flex:1; color:var(--gray); }
+  .row input[type=range] { width:100px; }
+  #measure { margin-top:10px; padding-top:10px; border-top:1px solid #274b73; font-size:13px; line-height:1.6; }
+  #measure .v { color:var(--orange); font-weight:700; }
+  #hint { position:fixed; bottom:12px; left:50%; transform:translateX(-50%); z-index:10; background:rgba(11,22,34,.85);
+          border:1px solid #274b73; border-radius:20px; padding:6px 16px; font-size:12px; color:#93c5fd; }
+  #loading { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px;
+             background:#0b1622; z-index:20; }
+  .spin { width:42px; height:42px; border:4px solid #274b73; border-top-color:var(--orange); border-radius:50%; animation:sp 1s linear infinite; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+  #err { max-width:520px; text-align:center; color:#fca5a5; font-size:13px; line-height:1.5; }
+</style>
+</head>
+<body>
+<header>
+  <div class="t">BC-Archi · Nuage de points</div>
+  <div class="s" id="sub">chargement…</div>
+</header>
+
+<div id="app"></div>
+
+<div id="panel" style="display:none">
+  <h3>Affichage</h3>
+  <div class="row"><label>Taille des points</label><input type="range" id="ptsize" min="0.2" max="5" step="0.1" value="1.2"></div>
+  <div class="row"><label for="chk-vert">Verticale bloquée (Z haut)</label><input type="checkbox" id="chk-vert" checked></div>
+  <button class="btn" id="btn-fit">↺ Recentrer la vue</button>
+  <button class="btn" id="btn-top">⬇ Vue de dessus (plan)</button>
+  <button class="btn" id="btn-measure">📏 Mesurer (distance)</button>
+  <div id="measure" style="display:none">
+    <div>Distance 3D : <span class="v" id="m-dist">—</span></div>
+    <div>Δ Hauteur : <span class="v" id="m-dz">—</span></div>
+    <div>Δ Horizontal : <span class="v" id="m-dxy">—</span></div>
+    <div style="color:var(--gray);font-size:11px;margin-top:6px">Clique 2 points du nuage.<br>Réinitialiser : re-clic sur 📏</div>
+  </div>
+  <button class="btn" id="btn-level">📐 Redresser (2 pts verticaux)</button>
+  <div id="level" style="display:none">
+    <div style="color:var(--gray);font-size:11px;margin-top:6px">Clique <b>le bas</b> puis <b>le haut</b> d'une arête qui doit être verticale (jambage de fenêtre, chaînage d'angle). Le nuage pivote pour la redresser.</div>
+    <div id="level-done" style="color:var(--green,#16a34a);font-size:11px;margin-top:4px"></div>
+    <button class="btn" id="btn-level-reset" style="display:none;margin-top:6px">↺ Annuler le redressement</button>
+  </div>
+</div>
+
+<div id="hint" style="display:none">Clic-gauche : rotation · molette : zoom · clic-droit : déplacer</div>
+
+<div id="loading">
+  <div class="spin" id="spin"></div>
+  <div id="load-txt">Initialisation…</div>
+  <div id="err"></div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { LASLoader } from 'https://esm.sh/@loaders.gl/las@4.2.0';
+import { parse } from 'https://esm.sh/@loaders.gl/core@4.2.0';
+
+const SUPA_URL  = 'https://fnfrusblyzndbzckkfir.supabase.co';
+const SUPA_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZuZnJ1c2JseXpuZGJ6Y2trZmlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1MzA4NDcsImV4cCI6MjA4MzEwNjg0N30.LBIKt0VPkd6gAhBVFuqLDx8f1236yc4W7WKOUuHK3Ts';
+
+const $ = id => document.getElementById(id);
+const releve = new URLSearchParams(location.search).get('releve');
+const fail = (m) => { $('spin').style.display='none'; $('load-txt').textContent='Erreur'; $('err').textContent = m; };
+
+let renderer, scene, camera, controls, cloud;
+
+function initThree() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0b1622);
+  camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.01, 100000);
+  renderer = new THREE.WebGLRenderer({ antialias:true });
+  renderer.setSize(innerWidth, innerHeight); renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  $('app').appendChild(renderer.domElement);
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.zoomToCursor = true;   // zoom molette centré sur le curseur, pas sur la cible orbite
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+  applyVertLock();
+  // Verrou vertical continu : tant que la case est cochée, le "haut" caméra est
+  // maintenu sur Y À CHAQUE frame. Le roulis ne peut plus s'installer.
+  (function loop(){
+    requestAnimationFrame(loop);
+    if ($('chk-vert')?.checked) camera.up.set(0, 1, 0);
+    controls.update();
+    renderer.render(scene, camera);
+  })();
+}
+
+// Verrou vertical robuste. Bug corrigé (09/07/2026) : l'ancien code ne forçait
+// up=(0,1,0) que HORS zénith → près du pôle, un "up" périmé restait, provoquant
+// un flip de gimbal (le bâtiment roulait dans tous les sens). Fix : quand la case
+// est cochée, up=Y en permanence + bornage des angles polaires (jamais le pôle
+// exact, qui dégénère). Décoché → trackball libre.
+function applyVertLock() {
+  if (!controls) return;
+  if ($('chk-vert')?.checked) {
+    controls.minPolarAngle = 0.05;
+    controls.maxPolarAngle = Math.PI - 0.05;
+    camera.up.set(0, 1, 0);
+  } else {
+    controls.minPolarAngle = 0;
+    controls.maxPolarAngle = Math.PI;
+  }
+}
+
+async function fetchLAZ(path) {
+  // endpoint /authenticated/ + clé anon (RLS SELECT public) — même mécanisme que le module relevé
+  const url = `${SUPA_URL}/storage/v1/object/authenticated/releves/${path}`;
+  const r = await fetch(url, { headers: { apikey: SUPA_ANON, Authorization:`Bearer ${SUPA_ANON}` } });
+  if (!r.ok) throw new Error(`Téléchargement LAZ : HTTP ${r.status}`);
+  return await r.arrayBuffer();
+}
+
+function buildCloud(data) {
+  const pos = data.attributes.POSITION.value;      // [easting, northing, elevation] (UTM, Z = altitude)
+  const n = pos.length / 3;
+  let cx=0, cy=0, cz=0;
+  for (let i=0;i<n;i++){ cx+=pos[3*i]; cy+=pos[3*i+1]; cz+=pos[3*i+2]; }
+  cx/=n; cy/=n; cz/=n;
+  // remap : verticale (élévation Z) → axe Y de Three.js (le "haut").
+  // Z = -(northing) : UTM (E,N,Up) est main droite ; (E,Up,N) serait main gauche → miroir.
+  const local = new Float32Array(pos.length);
+  for (let i=0;i<n;i++){
+    local[3*i]   = pos[3*i]   - cx;
+    local[3*i+1] = pos[3*i+2] - cz;
+    local[3*i+2] = -(pos[3*i+1] - cy);
+  }
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(local, 3));
+  const col = data.attributes.COLOR_0 && data.attributes.COLOR_0.value;
+  if (col) {
+    const size = data.attributes.COLOR_0.size || 3;
+    let max=0; for (let i=0;i<col.length;i++) if(col[i]>max) max=col[i];
+    const div = max>255 ? 65535 : 255;
+    const c = new Float32Array(n*3);
+    for (let i=0;i<n;i++){ c[3*i]=col[size*i]/div; c[3*i+1]=col[size*i+1]/div; c[3*i+2]=col[size*i+2]/div; }
+    geom.setAttribute('color', new THREE.BufferAttribute(c, 3));
+  }
+  const mat = new THREE.PointsMaterial({ size:1.2*0.02, vertexColors:!!col, color: col?0xffffff:0x93c5fd, sizeAttenuation:true });
+  cloud = new THREE.Points(geom, mat);
+  // Centre/rayon robustes (quantiles 2-98 % sur échantillon) : quelques points aberrants
+  // à des centaines de mètres gonflent la sphère englobante → recentrage/vue plan
+  // cadraient du vide avec le bâtiment minuscule au milieu. La vraie boundingSphere
+  // reste calculée pour le raycaster (test rayon/sphère préalable).
+  geom.computeBoundingSphere();
+  const step = Math.max(1, Math.floor(n / 100000));
+  const sx=[], sy=[], sz=[];
+  for (let i=0;i<n;i+=step){ sx.push(local[3*i]); sy.push(local[3*i+1]); sz.push(local[3*i+2]); }
+  const q = (a,t) => { const b=[...a].sort((u,v)=>u-v); return b[Math.floor(t*(b.length-1))]; };
+  const c1=[q(sx,.02),q(sy,.02),q(sz,.02)], c2=[q(sx,.98),q(sy,.98),q(sz,.98)];
+  cloud.userData.robust = {
+    center: new THREE.Vector3((c1[0]+c2[0])/2, (c1[1]+c2[1])/2, (c1[2]+c2[2])/2),
+    radius: Math.max(c2[0]-c1[0], c2[1]-c1[1], c2[2]-c1[2], 1) * 0.75,
+  };
+  scene.add(cloud);
+  fitView();
+  $('sub').textContent = `${n.toLocaleString('fr')} points`;
+}
+
+function fitView() {
+  if (!cloud) return;
+  const { center, radius: r } = cloud.userData.robust;
+  controls.target.copy(center);
+  camera.up.set(0, 1, 0);
+  camera.position.set(center.x + r*1.4, center.y + r*1.1, center.z + r*1.4);
+  camera.near = r/100; camera.far = r*500; camera.updateProjectionMatrix();
+}
+
+function topView() {
+  if (!cloud) return;
+  const { center, radius: r } = cloud.userData.robust;
+  controls.target.copy(center);
+  if ($('chk-vert')?.checked) {
+    // Verrou actif : vue quasi-zénithale mais up=Y (pas de nadir exact → pas de
+    // flip de gimbal ni de "up" (0,0,-1) qui casserait le verrou ensuite).
+    camera.up.set(0, 1, 0);
+    camera.position.set(center.x, center.y + r*2.2, center.z + r*0.18);
+  } else {
+    // Trackball libre : vrai nadir, nord (−Z) vers le haut de l'écran.
+    camera.up.set(0, 0, -1);
+    camera.position.set(center.x, center.y + r*2.2, center.z + r*0.001);
+  }
+  camera.near = r/100; camera.far = r*500; camera.updateProjectionMatrix();
+}
+
+// ── Mesure / Redressement (clic 2 points) ──
+let measuring=false, leveling=false, picks=[], markers=[], line=null;
+const raycaster = new THREE.Raycaster();
+function setMeasure(on){
+  measuring=on; if(on) setLevel(false); picks=[]; clearMarkers();
+  $('btn-measure').classList.toggle('active', on);
+  $('measure').style.display = on?'block':'none';
+  $('m-dist').textContent=$('m-dz').textContent=$('m-dxy').textContent='—';
+}
+function setLevel(on){
+  leveling=on; if(on) setMeasure(false); picks=[]; clearMarkers();
+  $('btn-level').classList.toggle('active', on);
+  $('level').style.display = on?'block':'none';
+  $('level-done').textContent='';
+}
+// Recalcule centre/rayon robustes (quantiles 2-98 %) après une transformation
+// du nuage (redressement) — même logique que buildCloud.
+function recomputeRobust(){
+  const p = cloud.geometry.attributes.position, n = p.count;
+  const step = Math.max(1, Math.floor(n/100000));
+  const sx=[], sy=[], sz=[];
+  for(let i=0;i<n;i+=step){ sx.push(p.getX(i)); sy.push(p.getY(i)); sz.push(p.getZ(i)); }
+  const q=(a,t)=>{ const b=[...a].sort((u,v)=>u-v); return b[Math.floor(t*(b.length-1))]; };
+  const c1=[q(sx,.02),q(sy,.02),q(sz,.02)], c2=[q(sx,.98),q(sy,.98),q(sz,.98)];
+  cloud.userData.robust = {
+    center: new THREE.Vector3((c1[0]+c2[0])/2,(c1[1]+c2[1])/2,(c1[2]+c2[2])/2),
+    radius: Math.max(c2[0]-c1[0], c2[1]-c1[1], c2[2]-c1[2], 1)*0.75,
+  };
+  cloud.geometry.computeBoundingSphere();
+}
+// Redresse le nuage pour que l'arête cliquée (bas→haut) devienne verticale.
+// Rotation la plus courte (v → +Y) cuite dans les positions → OrbitControls + verrou
+// portent ensuite sur une géométrie d'aplomb.
+function applyLevel(a, b){
+  const v = b.clone().sub(a);
+  if (v.y < 0) v.negate();                 // garantit le sens "vers le haut"
+  const ang = v.angleTo(new THREE.Vector3(0,1,0)) * 180/Math.PI;
+  const p = cloud.geometry.attributes.position;
+  // Snapshot des positions d'origine (une fois) → annulation possible après un
+  // mauvais clic (le redressement est cuit et cumulatif, donc non trivial à défaire).
+  if (!cloud.userData.origPos) cloud.userData.origPos = new Float32Array(p.array);
+  const quat = new THREE.Quaternion().setFromUnitVectors(v.normalize(), new THREE.Vector3(0,1,0));
+  const tmp = new THREE.Vector3();
+  for(let i=0;i<p.count;i++){ tmp.set(p.getX(i),p.getY(i),p.getZ(i)).applyQuaternion(quat); p.setXYZ(i,tmp.x,tmp.y,tmp.z); }
+  p.needsUpdate = true;
+  recomputeRobust();
+  fitView();
+  $('level-done').textContent = `✓ Redressé (${ang.toFixed(1)}° corrigés). Re-clic 📐 pour affiner.`;
+  $('btn-level-reset').style.display = 'block';
+  clearMarkers(); picks=[];
+}
+function resetLevel(){
+  if (!cloud?.userData.origPos) return;
+  cloud.geometry.attributes.position.array.set(cloud.userData.origPos);
+  cloud.geometry.attributes.position.needsUpdate = true;
+  cloud.userData.origPos = null;
+  recomputeRobust();
+  fitView();
+  $('level-done').textContent = '↺ Redressement annulé (nuage d’origine).';
+  $('btn-level-reset').style.display = 'none';
+  clearMarkers(); picks=[];
+}
+function clearMarkers(){ markers.forEach(m=>scene.remove(m)); markers=[]; if(line){scene.remove(line);line=null;} }
+function addMarker(p){
+  // rayon proportionnel à l'emprise du nuage (≈ 1/1000 du rayon englobant),
+  // borné 8 mm – 6 cm : visible sans masquer le détail pointé
+  const r = Math.min(0.06, Math.max(0.008, (cloud?.userData.robust?.radius || 10) / 600));
+  const m=new THREE.Mesh(new THREE.SphereGeometry(r,16,16), new THREE.MeshBasicMaterial({color:0xF97316, depthTest:false}));
+  m.renderOrder = 2;   // reste visible devant les points même à demi enfoncé dans le nuage
+  m.position.copy(p); scene.add(m); markers.push(m);
+}
+// Point du nuage le plus proche du rayon de picking (repli si l'intersection
+// Points directe échoue). Brute-force sur ~200k points = négligeable.
+function pickCloudPoint(){
+  const arr = cloud.geometry.attributes.position.array;
+  const O = raycaster.ray.origin, D = raycaster.ray.direction;
+  let best=-1, bestD=Infinity;
+  for(let i=0;i<arr.length;i+=3){
+    const px=arr[i]-O.x, py=arr[i+1]-O.y, pz=arr[i+2]-O.z;
+    const t = px*D.x + py*D.y + pz*D.z;        // projection sur le rayon
+    if(t<=0) continue;                          // derrière la caméra
+    const dx=px-D.x*t, dy=py-D.y*t, dz=pz-D.z*t;
+    const d=dx*dx+dy*dy+dz*dz;
+    if(d<bestD){ bestD=d; best=i; }
+  }
+  if(best<0) return null;
+  const tol=(cloud.userData.robust?.radius||10)/15;   // tolérance généreuse
+  if(Math.sqrt(bestD)>tol) return null;
+  return new THREE.Vector3(arr[best],arr[best+1],arr[best+2]);
+}
+document.addEventListener('pointerdown', (e)=>{
+  if(!(measuring||leveling) || !cloud || e.button!==0) return;
+  if (e.target.closest('#panel') || e.target.closest('header')) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const mouse = new THREE.Vector2(((e.clientX-rect.left)/rect.width)*2-1, -((e.clientY-rect.top)/rect.height)*2+1);
+  raycaster.setFromCamera(mouse, camera);
+  raycaster.params.Points.threshold = (cloud.userData.robust?.radius||10)/150;
+  const hit = raycaster.intersectObject(cloud)[0];
+  // Repli robuste : si l'intersection directe rate (nuage clairsemé), on prend le
+  // point le plus proche du rayon — le picking ne « rate » plus jamais.
+  const point = hit ? hit.point : pickCloudPoint();
+  if(!point) return;
+  if(picks.length===2){ picks=[]; clearMarkers(); }
+  picks.push(point.clone()); addMarker(point);
+  if(picks.length===2){
+    const a=picks[0], b=picks[1];
+    if(leveling){ applyLevel(a, b); return; }
+    $('m-dist').textContent = a.distanceTo(b).toFixed(3)+' m';
+    $('m-dz').textContent   = Math.abs(a.y-b.y).toFixed(3)+' m';          // Y = élévation
+    $('m-dxy').textContent  = Math.hypot(a.x-b.x, a.z-b.z).toFixed(3)+' m';
+    const g=new THREE.BufferGeometry().setFromPoints([a,b]);
+    line=new THREE.Line(g, new THREE.LineBasicMaterial({color:0xF97316})); scene.add(line);
+  }
+});
+
+async function main(){
+  if (!releve) return fail('Paramètre ?releve=<id> manquant dans l’URL.');
+  initThree();
+  try {
+    $('load-txt').textContent='Téléchargement du nuage…';
+    const buf = await fetchLAZ(`${releve}/pointcloud/points_web.laz`);
+    $('load-txt').textContent='Décodage LAZ…';
+    // fp64 obligatoire : coordonnées UTM (northing ~5 000 000 m) — en Float32 l'ulp
+    // vaut 0,5 m à cette magnitude → nuage quantifié en "lanières" parallèles.
+    // buildCloud recentre ensuite et redescend en Float32 sur des coordonnées locales.
+    const data = await parse(buf, LASLoader, { las:{ fp64:true } });
+    buildCloud(data);
+    $('loading').style.display='none';
+    $('panel').style.display='block';
+    $('hint').style.display='block';
+  } catch(e){ fail(e.message||String(e)); console.error(e); }
+}
+$('ptsize').addEventListener('input', e=>{ if(cloud) cloud.material.size = parseFloat(e.target.value)*0.02; });
+$('chk-vert').addEventListener('change', ()=>{ applyVertLock(); });
+$('btn-fit').addEventListener('click', fitView);
+$('btn-top').addEventListener('click', topView);
+$('btn-measure').addEventListener('click', ()=> setMeasure(!measuring));
+$('btn-level').addEventListener('click', ()=> setLevel(!leveling));
+$('btn-level-reset').addEventListener('click', resetLevel);
+main();
+</script>
+</body>
+</html>
