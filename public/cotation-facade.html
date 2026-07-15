@@ -1,0 +1,1379 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BC-Archi · Cotation perspective</title>
+<style>
+  :root{ --navy:#1e3a5f; --navy2:#162d4a; --orange:#F97316; --light:#f1f5f9; --line:#cbd5e1;
+         --h:#F97316; --v:#60a5fa; --z:#a78bfa; --ref:#22c55e; --mes:#fde047; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:#0f172a; background:#0b1622; }
+  header{ background:var(--navy); color:#fff; padding:10px 16px; border-bottom:3px solid var(--orange); display:flex; align-items:center; gap:12px; }
+  header .t{ font-weight:800; letter-spacing:.5px; }
+  header .s{ font-size:12px; color:#93c5fd; }
+  .wrap{ display:grid; grid-template-columns:350px 1fr; gap:0; height:calc(100vh - 51px); }
+  .panel{ background:#0f1d2e; color:#e2e8f0; padding:14px; overflow-y:auto; border-right:1px solid #1e3a5f; }
+  .panel h3{ font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:#93c5fd; margin:16px 0 8px; display:flex; align-items:center; gap:6px; }
+  .panel h3:first-child{ margin-top:0; }
+  .panel h3 .ok{ color:var(--ref); font-size:13px; }
+  .stage{ position:relative; background:#0b1622; overflow:hidden; }
+  #cv{ position:absolute; inset:0; width:100%; height:100%; cursor:grab; }
+  .btn{ display:block; width:100%; padding:8px; margin:6px 0; border:none; border-radius:7px; background:#1e3a5f; color:#fff; font-size:12.5px; cursor:pointer; text-align:left; }
+  .btn:hover{ background:#274a73; }
+  .btn.primary{ background:var(--orange); font-weight:700; }
+  .btn.ghost{ background:transparent; border:1px solid #274a73; }
+  .btn.mode-on{ outline:2px solid var(--orange); background:#274a73; }
+  .btn:disabled{ opacity:.45; cursor:not-allowed; }
+  label{ font-size:11.5px; color:#cbd5e1; display:block; margin:8px 0 3px; }
+  input[type=text],input[type=number]{ width:100%; padding:6px 8px; border-radius:6px; border:1px solid #274a73; background:#0b1622; color:#fff; font-size:12px; }
+  .hint{ font-size:10.5px; color:#94a3b8; line-height:1.45; margin:4px 0; }
+  .status{ font-size:11px; margin-top:6px; min-height:14px; line-height:1.5; }
+  .imglist{ display:flex; flex-wrap:wrap; gap:5px; }
+  .imgchip{ position:relative; width:64px; height:48px; border-radius:5px; overflow:hidden; border:2px solid transparent; cursor:pointer; }
+  .imgchip.active{ border-color:var(--orange); }
+  .imgchip img{ width:100%; height:100%; object-fit:cover; }
+  .seglist{ font-size:11px; }
+  .seglist .row{ display:flex; align-items:center; gap:6px; padding:3px 4px; border-radius:5px; }
+  .seglist .row:hover{ background:#16283c; }
+  .seglist .sw{ width:14px; height:3px; border-radius:2px; flex:none; }
+  .seglist .del{ margin-left:auto; color:#fca5a5; cursor:pointer; padding:0 4px; }
+  .cotes-table{ width:100%; border-collapse:collapse; font-size:11.5px; }
+  .cotes-table td{ padding:3px 5px; border-bottom:1px solid #16283c; }
+  .cotes-table tr:hover{ background:#16283c; }
+  .cotes-table .val{ font-weight:700; color:var(--mes); white-space:nowrap; }
+  .cotes-table .dir{ color:#94a3b8; }
+  .cotes-table .del{ color:#fca5a5; cursor:pointer; }
+  .refrow{ display:grid; grid-template-columns:1fr 74px 20px; gap:6px; align-items:center; margin:4px 0; font-size:11.5px; }
+  .refrow input{ padding:4px 6px; font-size:11.5px; }
+  .refrow .del{ color:#fca5a5; cursor:pointer; text-align:center; }
+  .tabs{ position:absolute; top:8px; left:50%; transform:translateX(-50%); z-index:6; display:flex; width:240px; gap:4px; }
+  .tab{ flex:1; text-align:center; padding:6px; font-size:12px; border-radius:6px; background:#16283ccc; color:#93c5fd; cursor:pointer; border:1px solid #1e3a5f; }
+  .tab.active{ background:var(--orange); color:#fff; font-weight:700; border-color:var(--orange); }
+  #loupe{ position:absolute; top:8px; right:8px; width:160px; height:160px; border:2px solid var(--orange); border-radius:8px; background:#000; display:none; z-index:7; pointer-events:none; }
+  #mode-banner{ position:absolute; bottom:10px; left:50%; transform:translateX(-50%); background:#0f1d2eee; border:1px solid #274a73; color:#e2e8f0; font-size:12px; padding:6px 14px; border-radius:18px; z-index:6; display:none; }
+  .badge{ display:inline-block; padding:1px 7px; border-radius:9px; font-size:10px; font-weight:700; }
+</style>
+</head>
+<body>
+<header>
+  <div class="t">BC-Archi · Cotation perspective</div>
+  <div class="s">Dimensions par lignes de fuite — la photo est l'instrument de mesure, le graphe est le livrable</div>
+</header>
+<div class="wrap">
+  <div class="panel">
+    <h3>1 · Photos</h3>
+    <button class="btn" onclick="document.getElementById('file').click()">📁 Charger des photos</button>
+    <input type="file" id="file" accept="image/*" multiple style="display:none">
+    <div class="imglist" id="imglist"></div>
+
+    <h3>2 · Arêtes de fuite <span class="ok" id="ok-vp" style="display:none">✓</span></h3>
+    <div class="hint">Tracez <b>≥ 2 arêtes réelles</b> par famille (linteaux, corniches, joints… / montants, chaînes d'angle…). Le point de fuite est calculé — inutile qu'il soit dans l'image. Molette = zoom, clic droit = déplacer.</div>
+    <button class="btn" id="btn-H" onclick="setMode('H')">━ Tracer des arêtes <b style="color:var(--h)">horizontales</b> — axe X</button>
+    <div class="seglist" id="list-H"></div>
+    <button class="btn" id="btn-V" onclick="setMode('V')">┃ Tracer des arêtes <b style="color:var(--v)">verticales</b> — axe Z</button>
+    <div class="seglist" id="list-V"></div>
+    <button class="btn" id="btn-Z" onclick="setMode('Z')">╱ Tracer des arêtes de <b style="color:var(--z)">profondeur</b> — axe Y (3D)</button>
+    <div class="seglist" id="list-Z"></div>
+    <div class="status" id="vp-status"></div>
+
+    <h3>3 · Échelle <span class="ok" id="ok-scale" style="display:none">✓</span></h3>
+    <div class="hint">Tracez un trait sur un élément de dimension connue (porte, appui, trame) puis saisissez sa valeur.</div>
+    <button class="btn" id="btn-ref" onclick="setMode('ref')">📏 Tracer une cote de référence</button>
+    <div id="ref-rows"></div>
+    <div class="status" id="cal-status"></div>
+
+    <h3>4 · Relevé de cotes</h3>
+    <button class="btn primary" id="btn-mes" onclick="setMode('mes')">✏️ Relever des cotes</button>
+    <table class="cotes-table" id="cotes-table"></table>
+    <div class="hint" id="mes-hint"></div>
+
+    <h3>4b · Volume 3D <span class="ok" id="ok-3d" style="display:none">✓</span></h3>
+    <div class="hint">Les arêtes H / V / profondeur <b>aimantées par leurs coins</b> forment le volume (onglet 3D). Tout est proportionnel : saisissez la longueur réelle d'UNE arête ci-dessous — le volume entier se met à l'échelle, ajustable à tout moment. Les crops Street View d'un même panorama se cumulent automatiquement.</div>
+    <table class="cotes-table" id="edges3d-table"></table>
+    <div class="status" id="vol-status"></div>
+    <h3>4c · Faces &amp; percements</h3>
+    <div class="hint">Les cycles fermés de 4 coins aimantés deviennent des faces typées (mur / toiture / dalle — corrigez si besoin). Percement : 2 clics sur la photo (coins opposés) — le plan de la face hôte porte la mesure, allège et dimensions déduites.</div>
+    <table class="cotes-table" id="faces-table"></table>
+    <button class="btn" id="btn-perce" onclick="setMode('perce')">◻ Tracer un percement (2 clics)</button>
+    <table class="cotes-table" id="perces-table"></table>
+    <div class="row2" style="margin:6px 0">
+      <div><label>Épaisseur murs (m)</label><input type="number" id="ep-mur" step="0.01" min="0.05" value="0.20"></div>
+      <div><label>Ép. toiture/dalle (m)</label><input type="number" id="ep-toit" step="0.01" min="0.05" value="0.25"></div>
+    </div>
+    <div class="hint">L'épaisseur n'est pas visible depuis l'extérieur : paramètre par type, extrusion vers l'intérieur du volume.</div>
+    <button class="btn" onclick="exportDXF3D()">📦 Exporter le volume en DXF 3D (arêtes + faces + percements)</button>
+    <button class="btn primary" onclick="exportIFC()">🏗 Exporter en IFC (murs réellement percés / toiture / dalle)</button>
+
+    <h3>5 · Graphe &amp; export</h3>
+    <button class="btn" onclick="exportDXF()">📐 Exporter le graphe en DXF</button>
+    <button class="btn ghost" onclick="exportPNG()">💾 PNG du graphe</button>
+    <button class="btn ghost" onclick="clearPhotoState()">🗑 Réinitialiser la photo active</button>
+    <div class="hint">Le DXF contient chaque trait relevé en vraies coordonnées métriques (calque RELEVE) + les valeurs de cotes (calque COTES). Import direct BricsCAD/AutoCAD, unités mm 1:1.</div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="tabs">
+      <div class="tab active" id="tab-photo" onclick="showView('photo')">Photo</div>
+      <div class="tab" id="tab-graph" onclick="showView('graph')">Graphe</div>
+      <div class="tab" id="tab-3d" onclick="showView('3d')">3D</div>
+      <div class="tab" style="flex:0 0 34px" title="Ajuster la vue (double-clic sur l'image aussi)" onclick="fitPhoto();draw()">⤢</div>
+    </div>
+    <canvas id="cv"></canvas>
+    <canvas id="loupe" width="160" height="160"></canvas>
+    <div id="mode-banner"></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+// ═════════════════════════════════════════════════════════════════════════════
+// Métrologie mono-image (technique perspectiviste automatisée) :
+//   1. ≥2 arêtes horizontales + ≥2 verticales → points de fuite (moindres carrés,
+//      jamais cliqués — ils peuvent être très loin hors image).
+//   2. PP au centre + pixels carrés → focale f² = −(p̂h·p̂v) → homographie MÉTRIQUE
+//      image→plan de façade (échelle isotrope : UNE cote suffit).
+//      Repli AFFINE si f dégénérée (photo frontale…) : une cote H + une cote V.
+//   3. Chaque trait relevé est converti en coordonnées métriques du plan →
+//      dimension instantanée + arête du graphe 2D → export DXF.
+// ═════════════════════════════════════════════════════════════════════════════
+
+const $ = id => document.getElementById(id);
+
+// ── État ─────────────────────────────────────────────────────────────────────
+const photos = [];   // { img, name, segsH:[], segsV:[], refs:[{seg,len,dir}], mesures:[{seg}] }
+let active = -1;
+let mode = 'pan';    // pan | H | V | ref | mes
+let view = 'photo';  // photo | graph
+let cam = { s:1, ox:0, oy:0 };            // vue photo : screen = img*s + o
+let pending = null;                        // 1er clic d'un segment en cours
+let dragPt = null;                         // { seg, end:1|2 } endpoint en cours de drag
+let panning = null;
+let mouse = { x:0, y:0, over:false };
+let pipeline = null;                       // résultat recompute() pour la photo active
+let vol = null;                            // reconstruction 3D du groupe actif
+let orbit = { yaw:-0.6, pitch:0.35 }, zoom3d = 1, orb = null;
+
+const cv = $('cv'), ctx = cv.getContext('2d');
+const loupe = $('loupe'), lctx = loupe.getContext('2d');
+
+const P = () => photos[active] || null;
+
+// ── Algèbre homogène ─────────────────────────────────────────────────────────
+const cross = (a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const dot3 = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const normv = a=>{ const n=Math.hypot(a[0],a[1],a[2])||1e-12; return [a[0]/n,a[1]/n,a[2]/n]; };
+function mul3(A,B){
+  const C=[[0,0,0],[0,0,0],[0,0,0]];
+  for(let i=0;i<3;i++)for(let j=0;j<3;j++)for(let k=0;k<3;k++) C[i][j]+=A[i][k]*B[k][j];
+  return C;
+}
+function inv3(m){
+  const a=m[0][0],b=m[0][1],c=m[0][2],d=m[1][0],e=m[1][1],f=m[1][2],g=m[2][0],h=m[2][1],i=m[2][2];
+  const A=e*i-f*h, B=c*h-b*i, C=b*f-c*e, D=f*g-d*i, E=a*i-c*g, F=c*d-a*f, G=d*h-e*g, H=b*g-a*h, I=a*e-b*d;
+  const det=a*A+b*D+c*G;
+  if(Math.abs(det)<1e-12) return null;
+  return [[A/det,B/det,C/det],[D/det,E/det,F/det],[G/det,H/det,I/det]];
+}
+const apply3=(m,p)=>[ m[0][0]*p[0]+m[0][1]*p[1]+m[0][2]*p[2],
+                      m[1][0]*p[0]+m[1][1]*p[1]+m[1][2]*p[2],
+                      m[2][0]*p[0]+m[2][1]*p[1]+m[2][2]*p[2] ];
+
+// Plus petit vecteur propre d'une matrice 3×3 symétrique (Jacobi).
+function smallestEig3(M){
+  const a=M.map(r=>r.slice());
+  const V=[[1,0,0],[0,1,0],[0,0,1]];
+  for(let it=0; it<40; it++){
+    let p=0,q=1,mx=Math.abs(a[0][1]);
+    if(Math.abs(a[0][2])>mx){p=0;q=2;mx=Math.abs(a[0][2]);}
+    if(Math.abs(a[1][2])>mx){p=1;q=2;mx=Math.abs(a[1][2]);}
+    if(mx<1e-14) break;
+    const th=0.5*Math.atan2(2*a[p][q], a[q][q]-a[p][p]);
+    const c=Math.cos(th), s=Math.sin(th);
+    for(let k=0;k<3;k++){ const kp=a[k][p],kq=a[k][q]; a[k][p]=c*kp-s*kq; a[k][q]=s*kp+c*kq; }
+    for(let k=0;k<3;k++){ const pk=a[p][k],qk=a[q][k]; a[p][k]=c*pk-s*qk; a[q][k]=s*pk+c*qk; }
+    for(let k=0;k<3;k++){ const vp=V[k][p],vq=V[k][q]; V[k][p]=c*vp-s*vq; V[k][q]=s*vp+c*vq; }
+  }
+  let idx=0;
+  if(a[1][1]<a[idx][idx]) idx=1;
+  if(a[2][2]<a[idx][idx]) idx=2;
+  return [V[0][idx],V[1][idx],V[2][idx]];
+}
+
+// ── Point de fuite : moindres carrés sur ≥2 arêtes (coords normalisées) ──────
+function computeVP(segs, W, H){
+  if(segs.length<2) return null;
+  const s=2/Math.hypot(W,H), cx=W/2, cy=H/2;
+  const N=(x,y)=>[(x-cx)*s,(y-cy)*s,1];
+  const M=[[0,0,0],[0,0,0],[0,0,0]];
+  for(const g of segs){
+    let l=cross(N(g.x1,g.y1), N(g.x2,g.y2));
+    const n=Math.hypot(l[0],l[1])||1e-12;
+    l=[l[0]/n,l[1]/n,l[2]/n];
+    for(let i=0;i<3;i++)for(let j=0;j<3;j++) M[i][j]+=l[i]*l[j];
+  }
+  const vn=smallestEig3(M);
+  // dénormalisation : p_img = T⁻¹ p_norm avec T = [s,0,-s·cx ; 0,s,-s·cy ; 0,0,1]
+  const v=[vn[0]/s + cx*vn[2], vn[1]/s + cy*vn[2], vn[2]];
+  // résidu : distance point-droite moyenne en px (VP fini uniquement)
+  let res=null;
+  if(Math.abs(v[2])>1e-12){
+    const px=v[0]/v[2], py=v[1]/v[2];
+    let sum=0;
+    for(const g of segs){
+      let l=cross([g.x1,g.y1,1],[g.x2,g.y2,1]);
+      const n=Math.hypot(l[0],l[1])||1e-12;
+      sum+=Math.abs((l[0]*px+l[1]*py+l[2])/n);
+    }
+    res=sum/segs.length;
+  }
+  return { v, res };
+}
+
+// ── Calibration métrique : PP centre + pixels carrés → f, puis H image→plan ──
+function calibrateMetric(vh, vv, W, H){
+  const diag=Math.hypot(W,H);
+  const finite=v=>Math.abs(v[2])*diag > 1e-4*Math.hypot(v[0],v[1]);
+  if(!finite(vh)||!finite(vv)) return null;
+  const cx=W/2, cy=H/2;
+  const p1=[vh[0]/vh[2]-cx, vh[1]/vh[2]-cy];
+  const p2=[vv[0]/vv[2]-cx, vv[1]/vv[2]-cy];
+  const f2=-(p1[0]*p2[0]+p1[1]*p2[1]);
+  if(!(f2>0)) return null;
+  const f=Math.sqrt(f2);
+  if(f<0.2*Math.max(W,H) || f>20*Math.max(W,H)) return null;   // focale implausible
+  let r1=normv([p1[0]/f, p1[1]/f, 1]);
+  let r2=normv([p2[0]/f, p2[1]/f, 1]);
+  const d=dot3(r1,r2);                                          // Gram-Schmidt (l'ortho
+  r2=normv([r2[0]-d*r1[0], r2[1]-d*r1[1], r2[2]-d*r1[2]]);      // monde n'est qu'approchée)
+  const K=[[f,0,0],[0,f,0],[0,0,1]];
+  const Hpi=mul3(K, [[r1[0],r2[0],0],[r1[1],r2[1],0],[r1[2],r2[2],1]]);
+  const Hip=inv3(Hpi);
+  if(!Hip) return null;
+  return {
+    type:'metric', f,
+    toPlane:(x,y)=>{ const q=apply3(Hip,[x-cx,y-cy,1]); return [q[0]/q[2], q[1]/q[2]]; },
+  };
+}
+
+// ── Repli affine : [vph vpv centre]⁻¹ — échelles H et V indépendantes ────────
+function affineFrame(vh, vv, W, H){
+  const Pm=[[vh[0],vv[0],W/2],[vh[1],vv[1],H/2],[vh[2],vv[2],1]];
+  const Pi=inv3(Pm);
+  if(!Pi) return null;
+  return {
+    type:'affine',
+    toPlane:(x,y)=>{ const q=apply3(Pi,[x,y,1]); return [q[0]/q[2], q[1]/q[2]]; },
+  };
+}
+
+// Direction d'un segment : comparaison aux directions vers les 2 PF à son milieu.
+function classifyDir(seg, vh, vv){
+  const mx=(seg.x1+seg.x2)/2, my=(seg.y1+seg.y2)/2;
+  const d=[seg.x2-seg.x1, seg.y2-seg.y1];
+  const toward=v=>{
+    if(Math.abs(v[2])<1e-12) return normv([v[0],v[1],0]).slice(0,2);
+    return (()=>{ const dx=v[0]/v[2]-mx, dy=v[1]/v[2]-my, n=Math.hypot(dx,dy)||1e-12; return [dx/n,dy/n]; })();
+  };
+  const dn=Math.hypot(d[0],d[1])||1e-12;
+  const u=[d[0]/dn, d[1]/dn];
+  const ah=Math.abs(u[0]*toward(vh)[0]+u[1]*toward(vh)[1]);
+  const av=Math.abs(u[0]*toward(vv)[0]+u[1]*toward(vv)[1]);
+  if(ah>av && ah>0.966) return 'H';       // < ~15° de la direction de fuite
+  if(av>ah && av>0.966) return 'V';
+  return 'O';
+}
+
+// ── Pipeline : recalculé à chaque modification ───────────────────────────────
+function recompute(){
+  pipeline=null;
+  const p=P();
+  if(!p) { renderAll(); return; }
+  const W=p.img.naturalWidth, H=p.img.naturalHeight;
+  const vpH=computeVP(p.segsH, W, H), vpV=computeVP(p.segsV, W, H);
+  let frame=null;
+  if(vpH && vpV){
+    frame=calibrateMetric(vpH.v, vpV.v, W, H) || affineFrame(vpH.v, vpV.v, W, H);
+  }
+  // Orientation canonique du plan : x croît vers la droite de l'image, y vers le
+  // haut (le signe des axes dépend sinon de la position des points de fuite → miroir).
+  if(frame){
+    const c0=frame.toPlane(W/2,H/2), rx=frame.toPlane(W/2+10,H/2), uy=frame.toPlane(W/2,H/2-10);
+    const fx=(rx[0]-c0[0])>=0?1:-1, fy=(uy[1]-c0[1])>=0?1:-1;
+    const base=frame.toPlane;
+    frame.toPlane=(x,y)=>{ const q=base(x,y); return [q[0]*fx, q[1]*fy]; };
+  }
+  let scale=null, su=null, sv=null;
+  if(frame){
+    for(const r of p.refs){
+      if(!(r.len>0)) continue;
+      const a=frame.toPlane(r.seg.x1,r.seg.y1), b=frame.toPlane(r.seg.x2,r.seg.y2);
+      const dpl=Math.hypot(b[0]-a[0], b[1]-a[1]);
+      if(dpl<1e-9) continue;
+      r.dir=classifyDir(r.seg, vpH.v, vpV.v);
+      if(frame.type==='metric'){ scale = r.len/dpl; }                 // isotrope : la dernière gagne
+      else {
+        if(r.dir==='H') su = r.len/Math.abs(b[0]-a[0]);
+        else if(r.dir==='V') sv = r.len/Math.abs(b[1]-a[1]);
+      }
+    }
+  }
+  // longueur métrique d'un segment (null si l'échelle manque)
+  const segLen = seg => {
+    if(!frame) return null;
+    const a=frame.toPlane(seg.x1,seg.y1), b=frame.toPlane(seg.x2,seg.y2);
+    const du=b[0]-a[0], dv=b[1]-a[1];
+    if(frame.type==='metric') return scale!=null ? Math.hypot(du,dv)*scale : null;
+    if(su!=null && sv!=null) return Math.hypot(du*su, dv*sv);
+    const dir=classifyDir(seg, vpH.v, vpV.v);
+    if(dir==='H' && su!=null) return Math.abs(du)*su;
+    if(dir==='V' && sv!=null) return Math.abs(dv)*sv;
+    return null;
+  };
+  // coordonnées métriques d'un point pour le graphe/DXF
+  const segPlane = seg => {
+    if(!frame) return null;
+    const a=frame.toPlane(seg.x1,seg.y1), b=frame.toPlane(seg.x2,seg.y2);
+    const kx = frame.type==='metric' ? (scale??0) : (su??0);
+    const ky = frame.type==='metric' ? (scale??0) : (sv??0);
+    if(!kx || !ky) return null;
+    return { a:[a[0]*kx, a[1]*ky], b:[b[0]*kx, b[1]*ky] };
+  };
+  pipeline={ vpH, vpV, frame, scale, su, sv, segLen, segPlane,
+             ready: !!frame && (frame.type==='metric' ? scale!=null : (su!=null&&sv!=null)) };
+  recompute3D();
+  renderAll();
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Volume 3D — reconstruction par rayons.
+// Les crops Street View d'un même panorama partagent le centre optique (rotation
+// pure) et leurs heading/pitch/fov sont connus exactement → tous les tracés du
+// groupe deviennent des rayons dans le repère commun du pano, où qu'ils aient
+// été faits. Photo isolée : rayons via la focale estimée par la calibration 2D.
+// ═════════════════════════════════════════════════════════════════════════════
+function groupPhotos(){
+  const p=P(); if(!p) return [];
+  const key=p.meta?.pano;
+  return key ? photos.filter(q=>q.meta?.pano===key) : [p];
+}
+function rayFromPoint(x,y,photo,fEst){
+  const w=photo.img.naturalWidth, h=photo.img.naturalHeight;
+  const m=photo.meta;
+  if(m && m.fov){
+    const f=(w/2)/Math.tan(m.fov*Math.PI/360);
+    let v=[(x-w/2)/f, -(y-h/2)/f, 1];                     // caméra : x droite, y haut, z avant
+    const pr=(m.pitch||0)*Math.PI/180, hd=(m.heading||0)*Math.PI/180;
+    v=[v[0], Math.cos(pr)*v[1]+Math.sin(pr)*v[2], -Math.sin(pr)*v[1]+Math.cos(pr)*v[2]];
+    return normv([ Math.cos(hd)*v[0]+Math.sin(hd)*v[2], v[1], -Math.sin(hd)*v[0]+Math.cos(hd)*v[2] ]);
+  }
+  return normv([(x-w/2)/fEst, -(y-h/2)/fEst, 1]);
+}
+function recompute3D(){
+  vol=null;
+  const p=P(); if(!p) return;
+  const grp=groupPhotos();
+  const fEst = pipeline?.frame?.type==='metric' ? pipeline.frame.f : null;
+  if(grp.some(q=>!q.meta?.fov) && !fEst){
+    if(p.segsZ.length) vol={err:'no-f'};
+    return;
+  }
+  // 1. Directions par famille : chaque arête tracée définit un plan d'interprétation
+  // (centre + 2 rayons) ; la direction monde annule tous les n·d → plus petit vecteur propre.
+  const fam={H:[],V:[],Z:[]};
+  const obsSegs=[];
+  for(const q of grp){
+    [['H',q.segsH],['V',q.segsV],['Z',q.segsZ]].forEach(([ax,list])=>{
+      for(const s of list){
+        const r1=rayFromPoint(s.x1,s.y1,q,fEst), r2=rayFromPoint(s.x2,s.y2,q,fEst);
+        fam[ax].push(normv(cross(r1,r2)));
+        obsSegs.push({seg:s, axis:ax, r1, r2});
+      }
+    });
+  }
+  if(fam.H.length<2 || fam.V.length<2 || fam.Z.length<1){
+    if(fam.Z.length) vol={err:'need-edges', nH:fam.H.length, nV:fam.V.length, nZ:fam.Z.length};
+    return;
+  }
+  const dirFrom=ns=>{
+    const M=[[0,0,0],[0,0,0],[0,0,0]];
+    for(const n of ns) for(let i=0;i<3;i++)for(let j=0;j<3;j++) M[i][j]+=n[i]*n[j];
+    return normv(smallestEig3(M));
+  };
+  let dX=dirFrom(fam.H), dY=dirFrom(fam.V);
+  // trièdre orthonormé DANS le vrai repère caméra → pas d'ambiguïté miroir :
+  // e2 vers le haut, e1 vers la droite, e3 = e1×e2 (règle de la main droite)
+  if(dY[1]<0) dY=dY.map(c=>-c);
+  const e2=dY;
+  let e1=normv([dX[0]-dot3(dX,e2)*e2[0], dX[1]-dot3(dX,e2)*e2[1], dX[2]-dot3(dX,e2)*e2[2]]);
+  if(e1[0]<0) e1=e1.map(c=>-c);
+  const e3=cross(e1,e2);
+  const axes={H:e1,V:e2,Z:e3};
+  // 2. Sommets : fusion angulaire des extrémités (même centre optique → un même
+  // coin vu sur plusieurs crops donne le même rayon, à la précision du tracé)
+  const COS_MERGE=Math.cos(0.35*Math.PI/180);
+  const verts=[];
+  const vfind=r=>{ for(const v of verts) if(dot3(v.ray,r)>COS_MERGE) return v; return null; };
+  const edges=[];
+  for(const o of obsSegs){
+    const vv=[o.r1,o.r2].map(r=>{ let v=vfind(r); if(!v){ v={ray:r}; verts.push(v); } return v; });
+    if(vv[0]!==vv[1]) edges.push({a:vv[0], b:vv[1], axis:o.axis, seg:o.seg});
+  }
+  // 3. Levée : ancre au sommet le plus connecté (profondeur 1), propagation —
+  // un sommet inconnu = intersection moindres carrés de son rayon avec la
+  // droite (sommet connu + direction de l'arête)
+  const deg=new Map();
+  edges.forEach(E=>{ deg.set(E.a,(deg.get(E.a)||0)+1); deg.set(E.b,(deg.get(E.b)||0)+1); });
+  let anchor=verts[0], best=-1;
+  for(const [v,d] of deg) if(d>best){ best=d; anchor=v; }
+  const pos=new Map(); pos.set(anchor, anchor.ray);
+  let changed=true;
+  while(changed){
+    changed=false;
+    for(const E of edges){
+      const ka=pos.has(E.a), kb=pos.has(E.b);
+      if(ka===kb) continue;
+      const Pk=pos.get(ka?E.a:E.b), unk=ka?E.b:E.a;
+      const r=unk.ray, d=axes[E.axis];
+      const rd=dot3(r,d), rP=dot3(r,Pk), dP=dot3(d,Pk);
+      if(1-rd*rd<1e-6) continue;                    // arête quasi alignée avec le rayon
+      const t=(rd*rP-dP)/(1-rd*rd), s=rP+rd*t;
+      if(s<=0) continue;                            // derrière la caméra : tracé incohérent
+      pos.set(unk,[r[0]*s, r[1]*s, r[2]*s]);
+      changed=true;
+    }
+  }
+  // 4. Coordonnées volume (origine = ancre, axes du trièdre)
+  const O=pos.get(anchor);
+  const toVol=Pt=>{ const q=[Pt[0]-O[0],Pt[1]-O[1],Pt[2]-O[2]]; return [dot3(q,e1),dot3(q,e2),dot3(q,e3)]; };
+  const eOut=edges.map(E=>{
+    if(!pos.has(E.a)||!pos.has(E.b)) return {axis:E.axis, seg:E.seg, a:null, b:null, len:null};
+    const A=toVol(pos.get(E.a)), B=toVol(pos.get(E.b));
+    return {axis:E.axis, seg:E.seg, a:A, b:B, len:Math.hypot(B[0]-A[0],B[1]-A[1],B[2]-A[2])};
+  });
+  vol={ err:null, edges:eOut, group:grp.length,
+        unplaced:verts.filter(v=>!pos.has(v)).length,
+        basis:{e1,e2,e3,O}, fEst };
+  detectFaces();
+  projectPerces();
+}
+// ── Faces : cycles rectangulaires de 4 coins aimantés ────────────────────────
+const AXC={H:0, V:1, Z:2};                      // composante vol de chaque famille
+function detectFaces(){
+  vol.faces=[];
+  const placed=vol.edges.filter(e=>e.a&&e.b);
+  const key=q=>q.map(c=>c.toFixed(6)).join(',');
+  const nodes=new Map(), adj=new Map();
+  for(const E of placed){
+    const ka=key(E.a), kb=key(E.b);
+    nodes.set(ka,E.a); nodes.set(kb,E.b);
+    if(!adj.has(ka)) adj.set(ka,[]);
+    if(!adj.has(kb)) adj.set(kb,[]);
+    adj.get(ka).push({to:kb,axis:E.axis});
+    adj.get(kb).push({to:ka,axis:E.axis});
+  }
+  const seen=new Set();
+  for(const [n,ne] of adj){
+    for(const eu of ne) for(const ew of ne){
+      if(eu.axis>=ew.axis) continue;
+      for(const em of (adj.get(eu.to)||[])){
+        if(em.axis!==ew.axis) continue;
+        if(!(adj.get(ew.to)||[]).some(x=>x.axis===eu.axis && x.to===em.to)) continue;
+        const ks=[n, eu.to, em.to, ew.to];
+        const fk=[...ks].sort().join('|');
+        if(seen.has(fk)) continue;
+        seen.add(fk);
+        const normal=['H','V','Z'].find(a=>a!==eu.axis && a!==ew.axis);
+        vol.faces.push({fk, pts:ks.map(k2=>nodes.get(k2)), normal, axes:[eu.axis,ew.axis]});
+      }
+    }
+  }
+  // typage par la normale : face verticale = mur ; horizontale haute = toiture, basse = dalle
+  const p0=groupPhotos()[0];
+  if(p0) p0.faceTypes=p0.faceTypes||{};
+  const ys=placed.flatMap(E=>[E.a[1],E.b[1]]);
+  const midY=(Math.min(...ys)+Math.max(...ys))/2;
+  for(const F of vol.faces){
+    const guess = F.normal==='V' ? ((F.pts.reduce((s,q)=>s+q[1],0)/4)>midY ? 'toiture' : 'dalle') : 'mur';
+    F.type=(p0 && p0.faceTypes[F.fk]) || guess;
+  }
+}
+// ── Percements : 2 clics photo → rectangle dans le plan de la face hôte ──────
+function volRayFrom(photo,x,y){
+  const b=vol.basis;
+  const r=rayFromPoint(x,y,photo,vol.fEst);
+  return normv([dot3(r,b.e1), dot3(r,b.e2), dot3(r,b.e3)]);
+}
+function volCamCenter(){
+  const b=vol.basis;
+  return [-dot3(b.O,b.e1), -dot3(b.O,b.e2), -dot3(b.O,b.e3)];
+}
+function volToPixel(photo,Pv){
+  const b=vol.basis;
+  const Pc=[ b.O[0]+b.e1[0]*Pv[0]+b.e2[0]*Pv[1]+b.e3[0]*Pv[2],
+             b.O[1]+b.e1[1]*Pv[0]+b.e2[1]*Pv[1]+b.e3[1]*Pv[2],
+             b.O[2]+b.e1[2]*Pv[0]+b.e2[2]*Pv[1]+b.e3[2]*Pv[2] ];
+  const w=photo.img.naturalWidth, h=photo.img.naturalHeight, m=photo.meta;
+  if(m && m.fov){
+    const hd=(m.heading||0)*Math.PI/180, pr=(m.pitch||0)*Math.PI/180;
+    const ch=Math.cos(hd), sh=Math.sin(hd), cp=Math.cos(pr), sp=Math.sin(pr);
+    const u=[ch*Pc[0]-sh*Pc[2], Pc[1], sh*Pc[0]+ch*Pc[2]];
+    const w3=[u[0], cp*u[1]-sp*u[2], sp*u[1]+cp*u[2]];
+    if(w3[2]<=0) return null;
+    const f=(w/2)/Math.tan(m.fov*Math.PI/360);
+    return [w/2+f*w3[0]/w3[2], h/2-f*w3[1]/w3[2]];
+  }
+  if(Pc[2]<=0) return null;
+  return [w/2+vol.fEst*Pc[0]/Pc[2], h/2-vol.fEst*Pc[1]/Pc[2]];
+}
+function projectPerces(){
+  vol.perces=[];
+  const p0=groupPhotos()[0];
+  if(!p0?.percePts?.length || !vol.faces?.length) return;
+  const C0=volCamCenter();
+  for(const pp of p0.percePts){
+    const d1=volRayFrom(pp.photo,pp.x1,pp.y1), d2=volRayFrom(pp.photo,pp.x2,pp.y2);
+    let bestF=null, bestPts=null, bestArea=1e18;
+    for(const F of vol.faces){
+      if(F.type==='off') continue;
+      const N=AXC[F.normal];
+      const cN=F.pts.reduce((s,q)=>s+q[N],0)/4;
+      const hit=d=>{ if(Math.abs(d[N])<1e-9) return null; const t=(cN-C0[N])/d[N]; return t>0 ? [C0[0]+t*d[0], C0[1]+t*d[1], C0[2]+t*d[2]] : null; };
+      const P1=hit(d1), P2=hit(d2);
+      if(!P1||!P2) continue;
+      const A1=AXC[F.axes[0]], A2=AXC[F.axes[1]];
+      const us=F.pts.map(q=>q[A1]), vs2=F.pts.map(q=>q[A2]);
+      const u0=Math.min(...us), u1=Math.max(...us), v0=Math.min(...vs2), v1=Math.max(...vs2);
+      const tol=0.03*Math.max(u1-u0, v1-v0);
+      const inside=q=> q[A1]>=u0-tol && q[A1]<=u1+tol && q[A2]>=v0-tol && q[A2]<=v1+tol;
+      if(!inside(P1)||!inside(P2)) continue;
+      const area=(u1-u0)*(v1-v0);
+      if(area<bestArea){ bestArea=area; bestF=F; bestPts=[P1,P2]; }
+    }
+    if(!bestF){ vol.perces.push({pp, face:null}); continue; }
+    const A1=AXC[bestF.axes[0]], A2=AXC[bestF.axes[1]], N=AXC[bestF.normal];
+    const cN=bestF.pts.reduce((s,q)=>s+q[N],0)/4;
+    const umin=Math.min(bestPts[0][A1],bestPts[1][A1]), umax=Math.max(bestPts[0][A1],bestPts[1][A1]);
+    const vmin=Math.min(bestPts[0][A2],bestPts[1][A2]), vmax=Math.max(bestPts[0][A2],bestPts[1][A2]);
+    const mk=(u,v)=>{ const q=[0,0,0]; q[A1]=u; q[A2]=v; q[N]=cN; return q; };
+    const span={}; span[A1]=umax-umin; span[A2]=vmax-vmin;
+    let allege=null;
+    if(span[1]!=null){
+      allege=(A1===1?umin:vmin) - Math.min(...bestF.pts.map(q=>q[1]));
+    }
+    vol.perces.push({ pp, face:bestF,
+      rect:[mk(umin,vmin), mk(umax,vmin), mk(umax,vmax), mk(umin,vmax)],
+      w: span[0]!=null ? span[0] : span[2],
+      h: span[1]!=null ? span[1] : span[2],
+      allege });
+  }
+}
+// Échelle du volume : l'utilisateur fixe la longueur réelle d'UNE arête (tableau
+// 4b) — tout est proportionnel, donc réajustable à tout moment sans retracer.
+function getVolScale(){
+  const p0=groupPhotos()[0];
+  const fix=p0?.scaleFix;
+  if(!vol || vol.err || !fix) return {k:null};
+  const E=vol.edges.find(e=>e.seg===fix.seg && e.len>0);
+  return E ? {k:fix.val/E.len, seg:fix.seg} : {k:null};
+}
+function draw3D(){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  ctx.font='13px Arial'; ctx.textAlign='center'; ctx.fillStyle='#475569';
+  if(!vol){ ctx.fillText('Tracez les arêtes du volume : ≥2 horizontales, ≥2 verticales, ≥1 profondeur — coins aimantés.', cv.width/2, cv.height/2); return; }
+  if(vol.err==='no-f'){ ctx.fillText('Focale inconnue — complétez les arêtes H et V (calibration), ou utilisez des captures Street View.', cv.width/2, cv.height/2); return; }
+  if(vol.err==='need-edges'){ ctx.fillText(`Arêtes insuffisantes (H:${vol.nH} V:${vol.nV} prof:${vol.nZ}) — il faut ≥2 H, ≥2 V, ≥1 profondeur.`, cv.width/2, cv.height/2); return; }
+  const placed=vol.edges.filter(e=>e.a&&e.b);
+  if(!placed.length){ ctx.fillText('Aucune arête connectée à l\'ancre — aimantez les coins entre eux.', cv.width/2, cv.height/2); return; }
+  const sc=getVolScale();
+  const cy2=Math.cos(orbit.yaw), sy2=Math.sin(orbit.yaw), cp2=Math.cos(orbit.pitch), sp2=Math.sin(orbit.pitch);
+  const rot=v=>{
+    const x=v[0]*cy2+v[2]*sy2, z=-v[0]*sy2+v[2]*cy2;
+    return [x, v[1]*cp2-z*sp2];
+  };
+  const pts=placed.flatMap(e=>[rot(e.a),rot(e.b)]);
+  const xs=pts.map(q=>q[0]), ys=pts.map(q=>q[1]);
+  const minx=Math.min(...xs), maxx=Math.max(...xs), miny=Math.min(...ys), maxy=Math.max(...ys);
+  const k=Math.min((cv.width-160)/Math.max(maxx-minx,1e-6), (cv.height-160)/Math.max(maxy-miny,1e-6))*zoom3d;
+  const px=v=>{ const r=rot(v); return [cv.width/2+(r[0]-(minx+maxx)/2)*k, cv.height/2-(r[1]-(miny+maxy)/2)*k]; };
+  const colors={H:'#F97316', V:'#60a5fa', Z:'#a78bfa'};
+  placed.forEach((e,i)=>{
+    const [ax,ay]=px(e.a), [bx,by]=px(e.b);
+    ctx.strokeStyle=colors[e.axis]; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
+    ctx.fillStyle=colors[e.axis];
+    for(const [x,y] of [[ax,ay],[bx,by]]){ ctx.beginPath(); ctx.arc(x,y,3,0,7); ctx.fill(); }
+    const txt=sc.k!=null ? fmt(e.len*sc.k) : '×'+e.len.toFixed(2);
+    const mx=(ax+bx)/2, my=(ay+by)/2;
+    ctx.font='bold 11px Arial'; ctx.textAlign='center';
+    const w=ctx.measureText(txt).width;
+    ctx.fillStyle='rgba(11,22,34,.85)'; ctx.fillRect(mx-w/2-4, my-17, w+8, 15);
+    ctx.fillStyle=colors[e.axis]; ctx.fillText(txt, mx, my-5);
+  });
+  // percements (rectangles rouges dans le plan de leur face)
+  (vol.perces||[]).forEach(Pr=>{
+    if(!Pr.rect) return;
+    ctx.strokeStyle='#ef4444'; ctx.lineWidth=2; ctx.setLineDash([6,3]);
+    ctx.beginPath();
+    Pr.rect.forEach((q,i)=>{ const [X,Y]=px(q); i?ctx.lineTo(X,Y):ctx.moveTo(X,Y); });
+    ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
+  });
+  ctx.fillStyle='#94a3b8'; ctx.font='12px Arial'; ctx.textAlign='left';
+  ctx.fillText(`${vol.group>1 ? vol.group+' crops du même panorama · ' : ''}${placed.length} arêtes · ${(vol.faces||[]).length} face(s) · ${(vol.perces||[]).filter(q=>q.rect).length} percement(s) · `
+    + (sc.k!=null ? 'échelle fixée (ajustable en 4b)' : 'PROPORTIONNEL — saisissez une longueur en 4b')
+    + (vol.unplaced ? ` · ${vol.unplaced} sommet(s) non relié(s) à l'ancre` : ''), 14, cv.height-14);
+}
+function exportDXF3D(){
+  const placed=(vol&&!vol.err) ? vol.edges.filter(e=>e.a&&e.b) : [];
+  if(!placed.length){ alert('Volume 3D non disponible — tracez et connectez les arêtes.'); return; }
+  const sc=getVolScale();
+  if(sc.k==null && !confirm('Échelle non fixée : export PROPORTIONNEL (unité arbitraire). Continuer ?')) return;
+  // Repère bâtiment : X façade, Y profondeur (plan horizontal), Z vertical.
+  // Interne : vol = [x façade, hauteur, profondeur] → DXF (X, Y=prof, Z=haut).
+  const k=(sc.k??1)*1000;   // mm
+  const line=(a,b,lay)=>`0\nLINE\n8\n${lay}\n10\n${(a[0]*k).toFixed(1)}\n20\n${(a[2]*k).toFixed(1)}\n30\n${(a[1]*k).toFixed(1)}\n11\n${(b[0]*k).toFixed(1)}\n21\n${(b[2]*k).toFixed(1)}\n31\n${(b[1]*k).toFixed(1)}\n`;
+  let s='0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n';
+  const axLayer={H:'ARETES_X', V:'ARETES_Z', Z:'ARETES_Y'};
+  placed.forEach(E=>{ s+=line(E.a, E.b, axLayer[E.axis]); });
+  // faces typées + percements : calques sémantiques directement exploitables
+  const typeLayer={mur:'MURS', toiture:'TOITURE', dalle:'DALLES'};
+  (vol.faces||[]).forEach(F=>{
+    if(F.type==='off') return;
+    const L=typeLayer[F.type]||'FACES';
+    for(let i=0;i<4;i++) s+=line(F.pts[i], F.pts[(i+1)%4], L);
+  });
+  (vol.perces||[]).forEach(Pr=>{
+    if(!Pr.rect) return;
+    for(let i=0;i<4;i++) s+=line(Pr.rect[i], Pr.rect[(i+1)%4], 'PERCEMENTS');
+  });
+  s+='0\nENDSEC\n0\nEOF\n';
+  const a=document.createElement('a');
+  a.download=`volume3d_${(P()?.name||'photo').replace(/\.[^.]+$/,'')}.dxf`;
+  a.href=URL.createObjectURL(new Blob([s],{type:'application/dxf'}));
+  a.click();
+}
+// ── Export IFC (IFC2X3 STEP) : murs percés par IfcRelVoidsElement, toiture,
+// dalle. Épaisseurs paramétrées (invisibles depuis l'extérieur), extrusion vers
+// l'intérieur du volume. Écrit en JS pur — importable BricsCAD BIM / Revit.
+function buildIFC(){
+  const placed=(vol&&!vol.err)?vol.edges.filter(e=>e.a&&e.b):[];
+  if(!placed.length || !(vol.faces||[]).some(F=>F.type!=='off')) return null;
+  const sc=getVolScale();
+  const k=sc.k??1;
+  const epMur=parseFloat($('ep-mur').value)||0.2;
+  const epToit=parseFloat($('ep-toit').value)||0.25;
+  const I=q=>[q[0]*k, q[2]*k, q[1]*k];               // vol [x, haut, prof] → IFC [X, Y=prof, Z=haut]
+  const L=[]; let id=0;
+  const add=s=>{ L.push('#'+(++id)+'='+s+';'); return '#'+id; };
+  const r=x=>(Math.abs(x)<1e-9?0:x).toFixed(6);
+  const G=()=>{ const a2='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$'; let s2=''; for(let i=0;i<22;i++) s2+=a2[Math.floor(Math.random()*64)]; return s2; };
+  const pt=p=>add(`IFCCARTESIANPOINT((${r(p[0])},${r(p[1])},${r(p[2])}))`);
+  const dir=d=>add(`IFCDIRECTION((${r(d[0])},${r(d[1])},${r(d[2])}))`);
+  const person=add(`IFCPERSON($,$,'BC-Archi',$,$,$,$,$)`);
+  const org=add(`IFCORGANIZATION($,'BC-Archi',$,$,$)`);
+  const po=add(`IFCPERSONANDORGANIZATION(${person},${org},$)`);
+  const app=add(`IFCAPPLICATION(${org},'1.0','cotation-facade','cotation-facade')`);
+  const OH=add(`IFCOWNERHISTORY(${po},${app},$,.ADDED.,$,$,$,0)`);
+  const un1=add(`IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.)`);
+  const un2=add(`IFCSIUNIT(*,.AREAUNIT.,$,.SQUARE_METRE.)`);
+  const un3=add(`IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.)`);
+  const units=add(`IFCUNITASSIGNMENT((${un1},${un2},${un3}))`);
+  const wcs=add(`IFCAXIS2PLACEMENT3D(${pt([0,0,0])},$,$)`);
+  const ctx3=add(`IFCGEOMETRICREPRESENTATIONCONTEXT($,'Model',3,1.0E-5,${wcs},$)`);
+  const proj=add(`IFCPROJECT('${G()}',${OH},'Cotation BC-Archi',$,$,$,$,(${ctx3}),${units})`);
+  const lpSite=add(`IFCLOCALPLACEMENT($,${wcs})`);
+  const site=add(`IFCSITE('${G()}',${OH},'Site',$,$,${lpSite},$,$,.ELEMENT.,$,$,$,$,$)`);
+  const lpBat=add(`IFCLOCALPLACEMENT(${lpSite},${wcs})`);
+  const bat=add(`IFCBUILDING('${G()}',${OH},'Batiment',$,$,${lpBat},$,$,.ELEMENT.,$,$,$)`);
+  const lpNiv=add(`IFCLOCALPLACEMENT(${lpBat},${wcs})`);
+  const niv=add(`IFCBUILDINGSTOREY('${G()}',${OH},'Niveau 0',$,$,${lpNiv},$,$,.ELEMENT.,0.)`);
+  add(`IFCRELAGGREGATES('${G()}',${OH},$,$,${proj},(${site}))`);
+  add(`IFCRELAGGREGATES('${G()}',${OH},$,$,${site},(${bat}))`);
+  add(`IFCRELAGGREGATES('${G()}',${OH},$,$,${bat},(${niv}))`);
+  const zUp=dir([0,0,1]);
+  // centroïde : détermine le côté intérieur (sens d'extrusion des parois)
+  const allPts=placed.flatMap(E=>[I(E.a),I(E.b)]);
+  const cen=[0,1,2].map(i=>allPts.reduce((s2,q)=>s2+q[i],0)/allPts.length);
+  const products=[];
+  (vol.faces||[]).forEach((F,fi)=>{
+    if(F.type==='off') return;
+    const pts3=F.pts.map(I);
+    if(F.type==='mur'){
+      const zs=pts3.map(q=>q[2]);
+      const z0=Math.min(...zs), z1=Math.max(...zs);
+      let n=F.normal==='H' ? [1,0,0] : [0,1,0];
+      const fc=[0,1,2].map(i=>pts3.reduce((s2,q)=>s2+q[i],0)/4);
+      if(n[0]*(cen[0]-fc[0])+n[1]*(cen[1]-fc[1])<0) n=[-n[0],-n[1],0];
+      const u=[n[1],-n[0],0];                        // local Y = Z×u = n (vers l'intérieur)
+      const bases=pts3.filter(q=>Math.abs(q[2]-z0)<1e-6);
+      let Ori=bases[0];
+      for(const q of bases) if(q[0]*u[0]+q[1]*u[1] < Ori[0]*u[0]+Ori[1]*u[1]) Ori=q;
+      const Wm=Math.max(...pts3.map(q=>(q[0]-Ori[0])*u[0]+(q[1]-Ori[1])*u[1]));
+      const Hm=z1-z0;
+      const ax=add(`IFCAXIS2PLACEMENT3D(${pt(Ori)},${zUp},${dir(u)})`);
+      const lp=add(`IFCLOCALPLACEMENT(${lpNiv},${ax})`);
+      const pc=add(`IFCCARTESIANPOINT((${r(Wm/2)},${r(epMur/2)}))`);
+      const p2=add(`IFCAXIS2PLACEMENT2D(${pc},$)`);
+      const prof=add(`IFCRECTANGLEPROFILEDEF(.AREA.,$,${p2},${r(Wm)},${r(epMur)})`);
+      const spos=add(`IFCAXIS2PLACEMENT3D(${pt([0,0,0])},$,$)`);
+      const solid=add(`IFCEXTRUDEDAREASOLID(${prof},${spos},${zUp},${r(Hm)})`);
+      const shape=add(`IFCSHAPEREPRESENTATION(${ctx3},'Body','SweptSolid',(${solid}))`);
+      const pds=add(`IFCPRODUCTDEFINITIONSHAPE($,$,(${shape}))`);
+      const wall=add(`IFCWALL('${G()}',${OH},'Mur F${fi+1}',$,$,${lp},${pds},$)`);
+      products.push(wall);
+      (vol.perces||[]).forEach((Pr,pi)=>{
+        if(Pr.face!==F || !Pr.rect) return;
+        const rp=Pr.rect.map(I);
+        const us2=rp.map(q=>(q[0]-Ori[0])*u[0]+(q[1]-Ori[1])*u[1]);
+        const zo=rp.map(q=>q[2]-z0);
+        const u0=Math.min(...us2), uw=Math.max(...us2)-u0;
+        const v0=Math.min(...zo), vh=Math.max(...zo)-v0;
+        const opc=add(`IFCCARTESIANPOINT((${r(u0+uw/2)},${r(epMur/2)}))`);
+        const op2=add(`IFCAXIS2PLACEMENT2D(${opc},$)`);
+        const oprof=add(`IFCRECTANGLEPROFILEDEF(.AREA.,$,${op2},${r(uw)},${r(epMur+0.1)})`);
+        const ospos=add(`IFCAXIS2PLACEMENT3D(${pt([0,0,v0])},$,$)`);
+        const osolid=add(`IFCEXTRUDEDAREASOLID(${oprof},${ospos},${zUp},${r(vh)})`);
+        const oshape=add(`IFCSHAPEREPRESENTATION(${ctx3},'Body','SweptSolid',(${osolid}))`);
+        const opds=add(`IFCPRODUCTDEFINITIONSHAPE($,$,(${oshape}))`);
+        const oax=add(`IFCAXIS2PLACEMENT3D(${pt([0,0,0])},$,$)`);
+        const olp=add(`IFCLOCALPLACEMENT(${lp},${oax})`);
+        const opening=add(`IFCOPENINGELEMENT('${G()}',${OH},'P${pi+1}',$,$,${olp},${opds},$)`);
+        add(`IFCRELVOIDSELEMENT('${G()}',${OH},$,$,${wall},${opening})`);
+      });
+    } else {
+      const z=pts3.reduce((s2,q)=>s2+q[2],0)/4;
+      const xs2=pts3.map(q=>q[0]), ys2=pts3.map(q=>q[1]);
+      const x0=Math.min(...xs2), y0=Math.min(...ys2);
+      const dx=Math.max(...xs2)-x0, dy=Math.max(...ys2)-y0;
+      const ax=add(`IFCAXIS2PLACEMENT3D(${pt([x0,y0,z])},$,$)`);
+      const lp=add(`IFCLOCALPLACEMENT(${lpNiv},${ax})`);
+      const pc=add(`IFCCARTESIANPOINT((${r(dx/2)},${r(dy/2)}))`);
+      const p2=add(`IFCAXIS2PLACEMENT2D(${pc},$)`);
+      const prof=add(`IFCRECTANGLEPROFILEDEF(.AREA.,$,${p2},${r(dx)},${r(dy)})`);
+      const spos=add(`IFCAXIS2PLACEMENT3D(${pt([0,0,0])},$,$)`);
+      const down=dir([0,0,-1]);
+      const solid=add(`IFCEXTRUDEDAREASOLID(${prof},${spos},${down},${r(epToit)})`);
+      const shape=add(`IFCSHAPEREPRESENTATION(${ctx3},'Body','SweptSolid',(${solid}))`);
+      const pds=add(`IFCPRODUCTDEFINITIONSHAPE($,$,(${shape}))`);
+      const slab=add(`IFCSLAB('${G()}',${OH},'${F.type==='toiture'?'Toiture':'Dalle'} F${fi+1}',$,$,${lp},${pds},$,${F.type==='toiture'?'.ROOF.':'.FLOOR.'})`);
+      products.push(slab);
+    }
+  });
+  add(`IFCRELCONTAINEDINSPATIALSTRUCTURE('${G()}',${OH},$,$,(${products.join(',')}),${niv})`);
+  return 'ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((\'\'),\'2;1\');\n'
+    + `FILE_NAME('cotation','${new Date().toISOString().slice(0,19)}',('BC-Archi'),('BC-Archi'),'cotation-facade','cotation-facade','');\n`
+    + 'FILE_SCHEMA((\'IFC2X3\'));\nENDSEC;\nDATA;\n'
+    + L.join('\n') + '\nENDSEC;\nEND-ISO-10303-21;\n';
+}
+function exportIFC(){
+  const sc=getVolScale();
+  if(sc.k==null && !confirm('Échelle non fixée : IFC exporté en unités PROPORTIONNELLES. Continuer ?')) return;
+  const out=buildIFC();
+  if(!out){ alert('Volume ou faces indisponibles — tracez et typez les faces (4c).'); return; }
+  const a=document.createElement('a');
+  a.download=`volume_${(P()?.name||'photo').replace(/\.[^.]+$/,'')}.ifc`;
+  a.href=URL.createObjectURL(new Blob([out],{type:'application/x-step'}));
+  a.click();
+}
+
+// ── UI : modes ───────────────────────────────────────────────────────────────
+const MODE_LABEL={
+  H:'Tracez une arête HORIZONTALE réelle — 2 clics (début / fin). Échap pour annuler.',
+  V:'Tracez une arête VERTICALE réelle — 2 clics. Échap pour annuler.',
+  Z:'Tracez une arête de PROFONDEUR (retour, pignon, tableau…) — 2 clics. Les coins s\'aimantent aux arêtes existantes.',
+  ref:'Tracez la cote de référence sur un élément de dimension connue — 2 clics.',
+  mes:'Relevez une cote — 2 clics. La dimension s\'affiche instantanément.',
+  perce:'Percement : cliquez 2 coins OPPOSÉS de l\'ouverture sur la photo — la face hôte est détectée automatiquement.',
+};
+function setMode(m){
+  mode = (mode===m) ? 'pan' : m;
+  pending=null;
+  ['H','V','Z','ref','mes','perce'].forEach(k=>$('btn-'+k).classList.toggle('mode-on', mode===k));
+  const b=$('mode-banner');
+  if(MODE_LABEL[mode]){ b.textContent=MODE_LABEL[mode]; b.style.display='block'; }
+  else b.style.display='none';
+  cv.style.cursor = mode==='pan' ? 'grab' : 'crosshair';
+  if(view!=='photo') showView('photo');
+  draw();
+}
+
+// ── Photos ───────────────────────────────────────────────────────────────────
+function addFiles(items){
+  let first = photos.length===0;
+  for(const it of items){
+    const f = it.file || it;                 // File direct (input) ou {file, meta} (postMessage)
+    const meta = it.meta || null;            // meta SV : {pano, heading, pitch, fov, size}
+    const img=new Image();
+    img.onload=()=>{
+      photos.push({ img, name:f.name||'photo', meta, segsH:[], segsV:[], segsZ:[], refs:[], mesures:[] });
+      renderList();
+      if(first){ first=false; setActive(photos.length-1); }
+    };
+    img.src=URL.createObjectURL(f);
+  }
+}
+$('file').addEventListener('change', e=>addFiles(e.target.files));
+function renderList(){
+  const box=$('imglist'); box.innerHTML='';
+  photos.forEach((p,i)=>{
+    const c=document.createElement('div');
+    c.className='imgchip'+(i===active?' active':'');
+    c.onclick=()=>setActive(i);
+    const im=document.createElement('img'); im.src=p.img.src; c.appendChild(im);
+    box.appendChild(c);
+  });
+}
+function setActive(i){
+  active=i; pending=null;
+  renderList();
+  fitPhoto();
+  recompute();
+}
+function clearPhotoState(){
+  const p=P(); if(!p) return;
+  if(!confirm('Effacer arêtes, cotes de référence et relevés de la photo active ?')) return;
+  p.segsH=[]; p.segsV=[]; p.segsZ=[]; p.refs=[]; p.mesures=[];
+  recompute();
+}
+
+// ── Vue photo : zoom / pan ───────────────────────────────────────────────────
+function resizeCanvas(){
+  const r=$('stage').getBoundingClientRect();
+  cv.width=r.width; cv.height=r.height;
+  draw();
+}
+addEventListener('resize', resizeCanvas);
+function fitPhoto(){
+  const p=P(); if(!p) return;
+  const s=Math.min(cv.width/p.img.naturalWidth, cv.height/p.img.naturalHeight)*0.96;
+  cam={ s, ox:(cv.width-p.img.naturalWidth*s)/2, oy:(cv.height-p.img.naturalHeight*s)/2 };
+}
+const toScreen=(x,y)=>[x*cam.s+cam.ox, y*cam.s+cam.oy];
+const toImage=(X,Y)=>[(X-cam.ox)/cam.s, (Y-cam.oy)/cam.s];
+
+cv.addEventListener('wheel', e=>{
+  e.preventDefault();
+  if(view==='3d'){ zoom3d*=Math.exp(-e.deltaY*0.0015); draw(); return; }
+  if(view!=='photo') return;
+  const k=Math.exp(-e.deltaY*0.0015);
+  const [ix,iy]=toImage(e.offsetX,e.offsetY);
+  cam.s*=k;
+  cam.ox=e.offsetX-ix*cam.s; cam.oy=e.offsetY-iy*cam.s;
+  draw();
+},{passive:false});
+cv.addEventListener('contextmenu', e=>e.preventDefault());
+cv.addEventListener('dblclick', ()=>{ if(view==='photo' && mode==='pan'){ fitPhoto(); draw(); } });
+
+cv.addEventListener('mousedown', e=>{
+  if(view==='3d'){ orb={x:e.offsetX, y:e.offsetY}; return; }
+  if(view!=='photo') return;
+  if(e.button===2 || e.button===1 || mode==='pan'){
+    if(e.button===0 && mode!=='pan') return;
+    panning={x:e.offsetX, y:e.offsetY};
+    cv.style.cursor='grabbing';
+    return;
+  }
+  // drag d'une extrémité existante ? (déplace TOUTES les extrémités coïncidentes
+  // — un coin aimanté partagé par plusieurs arêtes reste un seul sommet)
+  const hit=hitEndpoint(e.offsetX,e.offsetY);
+  if(hit && !pending){
+    const hx=hit.end===1?hit.seg.x1:hit.seg.x2, hy=hit.end===1?hit.seg.y1:hit.seg.y2;
+    // armé seulement après 3 px de mouvement : un clic immobile sur un coin
+    // démarre un tracé aimanté, un glissement déplace le sommet partagé
+    dragPt={ pts: coincidentEndpoints(hx,hy), armed:false, sx:e.offsetX, sy:e.offsetY };
+    return;
+  }
+});
+cv.addEventListener('mousemove', e=>{
+  mouse={x:e.offsetX, y:e.offsetY, over:true};
+  if(orb){
+    orbit.yaw+=(e.offsetX-orb.x)*0.01;
+    orbit.pitch=Math.max(-1.4, Math.min(1.4, orbit.pitch+(e.offsetY-orb.y)*0.01));
+    orb={x:e.offsetX, y:e.offsetY};
+    draw(); return;
+  }
+  if(panning){
+    cam.ox+=e.offsetX-panning.x; cam.oy+=e.offsetY-panning.y;
+    panning={x:e.offsetX,y:e.offsetY};
+    draw(); return;
+  }
+  if(dragPt){
+    if(!dragPt.armed){
+      if(Math.hypot(e.offsetX-dragPt.sx, e.offsetY-dragPt.sy)<3) return;
+      dragPt.armed=true;
+    }
+    const [ix,iy]=toImage(e.offsetX,e.offsetY);
+    for(const q of dragPt.pts){
+      if(q.end===1){ q.seg.x1=ix; q.seg.y1=iy; } else { q.seg.x2=ix; q.seg.y2=iy; }
+    }
+    recompute(); return;
+  }
+  if(view==='photo') draw();
+});
+let suppressClick=false;
+addEventListener('mouseup', ()=>{
+  if(panning){ panning=null; suppressClick=true; cv.style.cursor = mode==='pan'?'grab':'crosshair'; }
+  if(dragPt){ if(dragPt.armed){ suppressClick=true; recompute(); } dragPt=null; }
+  if(orb){ orb=null; suppressClick=true; }
+});
+cv.addEventListener('mouseleave', ()=>{ mouse.over=false; draw(); });
+cv.addEventListener('click', e=>{
+  if(suppressClick){ suppressClick=false; return; }
+  if(view!=='photo' || mode==='pan' || panning || dragPt) return;
+  const p=P(); if(!p) return;
+  let [ix,iy]=toImage(e.offsetX,e.offsetY);
+  // aimantation : un clic près d'une extrémité existante réutilise exactement
+  // ses coordonnées → les arêtes partagent leurs sommets (connexité du volume)
+  const sn=snapPoint(e.offsetX,e.offsetY);
+  if(sn){ ix=sn.x; iy=sn.y; }
+  if(!pending){ pending={x:ix,y:iy}; draw(); return; }
+  const seg={x1:pending.x, y1:pending.y, x2:ix, y2:iy};
+  pending=null;
+  if(Math.hypot(seg.x2-seg.x1, seg.y2-seg.y1)*cam.s < 6) { draw(); return; }  // clic double accidentel
+  if(mode==='H') p.segsH.push(seg);
+  else if(mode==='V') p.segsV.push(seg);
+  else if(mode==='Z') p.segsZ.push(seg);
+  else if(mode==='ref'){ p.refs.push({seg, len:null, dir:null}); setMode('pan'); }
+  else if(mode==='mes') p.mesures.push({seg});
+  else if(mode==='perce'){
+    const p0=groupPhotos()[0];
+    if(p0){ (p0.percePts=p0.percePts||[]).push({photo:p, x1:seg.x1, y1:seg.y1, x2:seg.x2, y2:seg.y2}); }
+    setMode('pan');
+  }
+  recompute();
+});
+function snapPoint(X,Y){
+  const p=P(); if(!p) return null;
+  let best=null, bd=10;
+  const all=[...p.segsH, ...p.segsV, ...p.segsZ, ...p.refs.map(r=>r.seg), ...p.mesures.map(m=>m.seg)];
+  for(const s of all){
+    for(const [x,y] of [[s.x1,s.y1],[s.x2,s.y2]]){
+      const [sx,sy]=toScreen(x,y);
+      const d=Math.hypot(X-sx,Y-sy);
+      if(d<bd){ bd=d; best={x,y}; }
+    }
+  }
+  return best;
+}
+function coincidentEndpoints(x,y){
+  const p=P(); const out=[];
+  const all=[...p.segsH, ...p.segsV, ...p.segsZ, ...p.refs.map(r=>r.seg), ...p.mesures.map(m=>m.seg)];
+  for(const s of all){
+    if(Math.hypot(s.x1-x,s.y1-y)<1e-6) out.push({seg:s,end:1});
+    if(Math.hypot(s.x2-x,s.y2-y)<1e-6) out.push({seg:s,end:2});
+  }
+  return out;
+}
+addEventListener('keydown', e=>{
+  if(e.key==='Escape'){ pending=null; setMode('pan'); }
+});
+function hitEndpoint(X,Y){
+  const p=P(); if(!p) return null;
+  const all=[...p.segsH, ...p.segsV, ...p.segsZ, ...p.refs.map(r=>r.seg), ...p.mesures.map(m=>m.seg)];
+  for(const seg of all){
+    const [a,b]=toScreen(seg.x1,seg.y1), [c,d]=toScreen(seg.x2,seg.y2);
+    if(Math.hypot(X-a,Y-b)<9) return {seg, end:1};
+    if(Math.hypot(X-c,Y-d)<9) return {seg, end:2};
+  }
+  return null;
+}
+
+// ── Rendu vue photo ──────────────────────────────────────────────────────────
+function draw(){
+  if(view==='graph'){ drawGraph(); return; }
+  if(view==='3d'){ draw3D(); return; }
+  ctx.clearRect(0,0,cv.width,cv.height);
+  const p=P();
+  if(!p){
+    ctx.fillStyle='#475569'; ctx.font='14px Arial'; ctx.textAlign='center';
+    ctx.fillText('Chargez des photos pour commencer', cv.width/2, cv.height/2);
+    return;
+  }
+  ctx.save();
+  ctx.setTransform(cam.s,0,0,cam.s,cam.ox,cam.oy);
+  ctx.drawImage(p.img,0,0);
+  ctx.restore();
+
+  const css=getComputedStyle(document.documentElement);
+  const CH=css.getPropertyValue('--h').trim(), CVc=css.getPropertyValue('--v').trim(),
+        CZ=css.getPropertyValue('--z').trim(),
+        CR=css.getPropertyValue('--ref').trim(), CM=css.getPropertyValue('--mes').trim();
+
+  // guides : droite complète (fine, pointillée) de chaque arête → on VOIT la convergence
+  const guide=(seg,color)=>{
+    const [a,b]=toScreen(seg.x1,seg.y1), [c,d]=toScreen(seg.x2,seg.y2);
+    const dx=c-a, dy=d-b, n=Math.hypot(dx,dy)||1e-9;
+    const L=4000;
+    ctx.strokeStyle=color; ctx.globalAlpha=0.25; ctx.lineWidth=1; ctx.setLineDash([6,6]);
+    ctx.beginPath(); ctx.moveTo(a-dx/n*L, b-dy/n*L); ctx.lineTo(c+dx/n*L, d+dy/n*L); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha=1;
+  };
+  const segline=(seg,color,w)=>{
+    const [a,b]=toScreen(seg.x1,seg.y1), [c,d]=toScreen(seg.x2,seg.y2);
+    ctx.strokeStyle=color; ctx.lineWidth=w;
+    ctx.beginPath(); ctx.moveTo(a,b); ctx.lineTo(c,d); ctx.stroke();
+    ctx.fillStyle=color;
+    for(const [x,y] of [[a,b],[c,d]]){ ctx.beginPath(); ctx.arc(x,y,3.5,0,7); ctx.fill(); }
+  };
+  const label=(seg,txt,color)=>{
+    const [a,b]=toScreen(seg.x1,seg.y1), [c,d]=toScreen(seg.x2,seg.y2);
+    const mx=(a+c)/2, my=(b+d)/2;
+    ctx.font='bold 12px Arial';
+    const w=ctx.measureText(txt).width;
+    ctx.fillStyle='rgba(11,22,34,.85)';
+    ctx.fillRect(mx-w/2-5, my-19, w+10, 17);
+    ctx.fillStyle=color; ctx.textAlign='center';
+    ctx.fillText(txt, mx, my-6);
+  };
+
+  p.segsH.forEach(s=>{ guide(s,CH); segline(s,CH,2.5); });
+  p.segsV.forEach(s=>{ guide(s,CVc); segline(s,CVc,2.5); });
+  p.segsZ.forEach(s=>{ guide(s,CZ); segline(s,CZ,2.5); });
+  p.refs.forEach((r,i)=>{ segline(r.seg,CR,3); label(r.seg, r.len>0? `RÉF ${r.len} m` : 'RÉF : saisir la valeur →', CR); });
+  p.mesures.forEach((m,i)=>{
+    segline(m.seg,CM,2.5);
+    const L=pipeline?.segLen(m.seg);
+    label(m.seg, L!=null? `C${i+1} · ${fmt(L)}` : `C${i+1} · —`, CM);
+  });
+
+  // percements projetés sur la photo active (valable pour tout crop du groupe)
+  if(vol && !vol.err && vol.perces?.length){
+    const grp=groupPhotos();
+    const sc=getVolScale();
+    for(const Pr of vol.perces){
+      if(!Pr.rect || !grp.includes(Pr.pp.photo)) continue;
+      const pix=Pr.rect.map(q=>volToPixel(p,q));
+      if(pix.some(q=>!q)) continue;
+      ctx.strokeStyle='#ef4444'; ctx.lineWidth=2; ctx.setLineDash([6,3]);
+      ctx.beginPath();
+      pix.forEach((q,i)=>{ const [X,Y]=toScreen(q[0],q[1]); i?ctx.lineTo(X,Y):ctx.moveTo(X,Y); });
+      ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
+      if(sc.k!=null){
+        const cxy=pix.reduce((s,q)=>[s[0]+q[0]/4, s[1]+q[1]/4],[0,0]);
+        const [X,Y]=toScreen(cxy[0],cxy[1]);
+        const txt=`${fmt(Pr.w*sc.k)} × ${fmt(Pr.h*sc.k)}`;
+        ctx.font='bold 11px Arial'; ctx.textAlign='center';
+        const tw=ctx.measureText(txt).width;
+        ctx.fillStyle='rgba(11,22,34,.85)'; ctx.fillRect(X-tw/2-4, Y-8, tw+8, 15);
+        ctx.fillStyle='#ef4444'; ctx.fillText(txt, X, Y+4);
+      }
+    }
+  }
+  // indicateurs de PF (flèche au bord si hors champ)
+  if(pipeline){
+    if(pipeline.vpH) vpIndicator(pipeline.vpH.v, CH, 'PF·H');
+    if(pipeline.vpV) vpIndicator(pipeline.vpV.v, CVc, 'PF·V');
+  }
+
+  // segment en cours (élastique)
+  if(pending && mouse.over){
+    const [a,b]=toScreen(pending.x,pending.y);
+    const color = mode==='H'?CH : mode==='V'?CVc : mode==='ref'?CR : CM;
+    ctx.strokeStyle=color; ctx.lineWidth=2; ctx.setLineDash([4,4]);
+    ctx.beginPath(); ctx.moveTo(a,b); ctx.lineTo(mouse.x,mouse.y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle=color; ctx.beginPath(); ctx.arc(a,b,4,0,7); ctx.fill();
+  }
+  drawLoupe();
+}
+function fmt(m){ return m>=10 ? m.toFixed(2)+' m' : (m>=1 ? m.toFixed(2)+' m' : (m*100).toFixed(1)+' cm'); }
+
+function vpIndicator(v, color, name){
+  if(Math.abs(v[2])<1e-12) return;
+  const [X,Y]=toScreen(v[0]/v[2], v[1]/v[2]);
+  ctx.font='bold 11px Arial'; ctx.textAlign='center';
+  if(X>=0&&X<=cv.width&&Y>=0&&Y<=cv.height){
+    ctx.strokeStyle=color; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(X,Y,7,0,7); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(X-11,Y); ctx.lineTo(X+11,Y); ctx.moveTo(X,Y-11); ctx.lineTo(X,Y+11); ctx.stroke();
+    ctx.fillStyle=color; ctx.fillText(name, X, Y-13);
+    return;
+  }
+  // hors champ : flèche au bord dans sa direction
+  const cx0=cv.width/2, cy0=cv.height/2;
+  const dx=X-cx0, dy=Y-cy0, n=Math.hypot(dx,dy)||1e-9;
+  const t=Math.min((cv.width/2-18)/Math.abs(dx||1e-9), (cv.height/2-18)/Math.abs(dy||1e-9));
+  const ax=cx0+dx*t, ay=cy0+dy*t;
+  ctx.save();
+  ctx.translate(ax,ay); ctx.rotate(Math.atan2(dy,dx));
+  ctx.fillStyle=color;
+  ctx.beginPath(); ctx.moveTo(10,0); ctx.lineTo(-6,-6); ctx.lineTo(-6,6); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle=color;
+  const distPx=Math.round(Math.hypot((v[0]/v[2])-(toImage(cx0,cy0)[0]), (v[1]/v[2])-(toImage(cx0,cy0)[1])));
+  ctx.fillText(`${name} ${distPx>9999?'∞':distPx+' px'}`, ax-Math.sign(dx)*34, ay-Math.sign(dy)*10);
+}
+
+// loupe ×3 pendant les tracés — précision sans zoomer/dézoomer sans arrêt
+function drawLoupe(){
+  const activeTrace = mode!=='pan' && mouse.over;
+  loupe.style.display = activeTrace ? 'block' : 'none';
+  if(!activeTrace) return;
+  const R=27;
+  lctx.imageSmoothingEnabled=false;
+  lctx.clearRect(0,0,160,160);
+  lctx.drawImage(cv, mouse.x-R, mouse.y-R, R*2, R*2, 0, 0, 160, 160);
+  lctx.strokeStyle='#F97316'; lctx.lineWidth=1;
+  lctx.beginPath(); lctx.moveTo(80,0); lctx.lineTo(80,160); lctx.moveTo(0,80); lctx.lineTo(160,80); lctx.stroke();
+}
+
+// ── Rendu vue graphe ─────────────────────────────────────────────────────────
+function graphSegs(){
+  const p=P();
+  if(!p || !pipeline?.ready) return [];
+  const out=[];
+  p.mesures.forEach((m,i)=>{
+    const g=pipeline.segPlane(m.seg);
+    const L=pipeline.segLen(m.seg);
+    if(g) out.push({...g, txt:`C${i+1} · ${L!=null?fmt(L):'—'}`});
+  });
+  p.refs.forEach(r=>{
+    const g=pipeline.segPlane(r.seg);
+    if(g && r.len>0) out.push({...g, txt:`RÉF ${r.len} m`, ref:true});
+  });
+  return out;
+}
+function drawGraph(){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  const gs=graphSegs();
+  if(!gs.length){
+    ctx.fillStyle='#475569'; ctx.font='14px Arial'; ctx.textAlign='center';
+    ctx.fillText(pipeline?.ready ? 'Relevez des cotes (étape 4) — elles apparaîtront ici à l\'échelle.'
+                                 : 'Complétez arêtes de fuite + cote de référence pour activer le graphe.',
+                 cv.width/2, cv.height/2);
+    return;
+  }
+  // bornes (plan déjà orienté y vers le haut)
+  let xs=[], ys=[];
+  gs.forEach(s=>{ xs.push(s.a[0],s.b[0]); ys.push(s.a[1],s.b[1]); });
+  const minx=Math.min(...xs), maxx=Math.max(...xs), miny=Math.min(...ys), maxy=Math.max(...ys);
+  const W=Math.max(maxx-minx,0.5), Hh=Math.max(maxy-miny,0.5);
+  const k=Math.min((cv.width-120)/W, (cv.height-120)/Hh);
+  const px=(x,y)=>[60+(x-minx)*k, cv.height-60-(y-miny)*k];
+  const ext=Math.max(W,Hh);
+  const step= ext>60?10 : ext>30?5 : ext>15?2 : 1;
+  ctx.strokeStyle='rgba(147,197,253,.15)'; ctx.fillStyle='#64748b'; ctx.font='10px Arial'; ctx.lineWidth=1; ctx.textAlign='left';
+  for(let m=Math.ceil(minx/step)*step; m<=maxx; m+=step){
+    const [X]=px(m,0); ctx.beginPath(); ctx.moveTo(X,20); ctx.lineTo(X,cv.height-40); ctx.stroke();
+    ctx.fillText(m.toFixed(0)+' m', X+2, cv.height-44);
+  }
+  for(let m=Math.ceil(miny/step)*step; m<=maxy; m+=step){
+    const Y=px(0,m)[1]; ctx.beginPath(); ctx.moveTo(40,Y); ctx.lineTo(cv.width-20,Y); ctx.stroke();
+    ctx.fillText(m.toFixed(0)+' m', 4, Y-2);
+  }
+  // segments
+  gs.forEach(s=>{
+    const [ax,ay]=px(s.a[0],s.a[1]), [bx,by]=px(s.b[0],s.b[1]);
+    ctx.strokeStyle=s.ref?'#22c55e':'#fde047'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
+    ctx.fillStyle=s.ref?'#22c55e':'#fde047';
+    for(const [x,y] of [[ax,ay],[bx,by]]){ ctx.beginPath(); ctx.arc(x,y,3,0,7); ctx.fill(); }
+    ctx.font='bold 11px Arial'; ctx.textAlign='center';
+    const mx=(ax+bx)/2, my=(ay+by)/2;
+    const w=ctx.measureText(s.txt).width;
+    ctx.fillStyle='rgba(11,22,34,.85)'; ctx.fillRect(mx-w/2-4,my-17,w+8,15);
+    ctx.fillStyle=s.ref?'#22c55e':'#fde047'; ctx.fillText(s.txt,mx,my-5);
+  });
+  // barre d'échelle
+  const bm=step, bp=bm*k, sx=60, sy=cv.height-24;
+  ctx.fillStyle='rgba(255,255,255,.9)'; ctx.fillRect(sx-8,sy-16,bp+16,26);
+  for(let i=0;i<4;i++){ ctx.fillStyle=i%2?'#fff':'#000'; ctx.fillRect(sx+i*bp/4,sy,bp/4,6); }
+  ctx.strokeStyle='#000'; ctx.strokeRect(sx,sy,bp,6);
+  ctx.fillStyle='#000'; ctx.font='bold 10px Arial'; ctx.textAlign='center';
+  ctx.fillText('0',sx,sy-4); ctx.fillText(bm+' m',sx+bp,sy-4);
+}
+function showView(v){
+  view=v;
+  $('tab-photo').classList.toggle('active',v==='photo');
+  $('tab-graph').classList.toggle('active',v==='graph');
+  $('tab-3d').classList.toggle('active',v==='3d');
+  $('mode-banner').style.display = (v==='photo'&&MODE_LABEL[mode]) ? 'block' : 'none';
+  cv.style.cursor = v==='3d' ? 'move' : (mode==='pan'?'grab':'crosshair');
+  draw();
+}
+
+// ── Panneaux latéraux ────────────────────────────────────────────────────────
+function renderPanels(){
+  const p=P();
+  const segRows=(list, color, box)=>{
+    box.innerHTML='';
+    (list||[]).forEach((s,i)=>{
+      const r=document.createElement('div'); r.className='row';
+      r.innerHTML=`<div class="sw" style="background:${color}"></div><span>arête ${i+1}</span><span class="del">✕</span>`;
+      r.querySelector('.del').onclick=()=>{ list.splice(i,1); recompute(); };
+      box.appendChild(r);
+    });
+  };
+  segRows(p?.segsH,'var(--h)',$('list-H'));
+  segRows(p?.segsV,'var(--v)',$('list-V'));
+  segRows(p?.segsZ,'var(--z)',$('list-Z'));
+
+  // refs
+  const rr=$('ref-rows'); rr.innerHTML='';
+  (p?.refs||[]).forEach((r,i)=>{
+    const d=document.createElement('div'); d.className='refrow';
+    const dirTxt=r.dir==='H'?'horizontale':r.dir==='V'?'verticale':'';
+    d.innerHTML=`<span>Cote réf. ${i+1} ${dirTxt?`<span class="badge" style="background:#1e3a5f">${dirTxt}</span>`:''}</span>
+                 <input type="number" step="0.01" min="0" placeholder="m" value="${r.len??''}">
+                 <span class="del">✕</span>`;
+    d.querySelector('input').oninput=e=>{ r.len=parseFloat(e.target.value)||null; recompute(); };
+    d.querySelector('.del').onclick=()=>{ p.refs.splice(i,1); recompute(); };
+    rr.appendChild(d);
+  });
+
+  // mesures
+  const tb=$('cotes-table'); tb.innerHTML='';
+  (p?.mesures||[]).forEach((m,i)=>{
+    const L=pipeline?.segLen(m.seg);
+    const dir=pipeline?.vpH&&pipeline?.vpV ? classifyDir(m.seg,pipeline.vpH.v,pipeline.vpV.v) : '';
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>C${i+1}</td><td class="dir">${dir==='H'?'horiz.':dir==='V'?'vert.':dir==='O'?'oblique':''}</td>
+                  <td class="val">${L!=null?fmt(L):'—'}</td><td class="del">✕</td>`;
+    tr.querySelector('.del').onclick=()=>{ p.mesures.splice(i,1); recompute(); };
+    tb.appendChild(tr);
+  });
+
+  // statuts
+  const nH=p?.segsH.length||0, nV=p?.segsV.length||0;
+  const vps=$('vp-status');
+  if(!p) vps.textContent='';
+  else {
+    const st=(n,vp,nom)=> n<2 ? `PF ${nom} : <span style="color:#fca5a5">${n}/2 arêtes</span>`
+      : `PF ${nom} : <span style="color:#86efac">✓ ${n} arêtes${vp?.res!=null?` (±${vp.res.toFixed(1)} px)`:''}</span>`;
+    vps.innerHTML = st(nH,pipeline?.vpH,'horizontal')+'<br>'+st(nV,pipeline?.vpV,'vertical');
+  }
+  $('ok-vp').style.display = (pipeline?.vpH&&pipeline?.vpV)?'inline':'none';
+
+  const cs=$('cal-status');
+  if(!pipeline?.frame) cs.innerHTML = p&&nH>=2&&nV>=2 ? '<span style="color:#fca5a5">Calibration impossible — vérifiez les arêtes.</span>' : 'En attente des deux familles d\'arêtes.';
+  else if(pipeline.frame.type==='metric'){
+    cs.innerHTML = `<span style="color:#86efac">Calibration métrique ✓</span> (f ≈ ${Math.round(pipeline.frame.f)} px) — <b>une seule cote suffit</b>, dans n'importe quelle direction.`
+      + (pipeline.scale==null ? '<br><span style="color:#fde047">Tracez la cote de référence et saisissez sa valeur.</span>':'');
+  } else {
+    cs.innerHTML = `<span style="color:#fde047">Mode affine</span> (perspective faible/frontale) — il faut <b>une cote horizontale ET une verticale</b>.`
+      + `<br>H : ${pipeline.su!=null?'<span style="color:#86efac">✓</span>':'manquante'} · V : ${pipeline.sv!=null?'<span style="color:#86efac">✓</span>':'manquante'}`;
+  }
+  $('ok-scale').style.display = pipeline?.ready?'inline':'none';
+  $('mes-hint').textContent = pipeline?.ready
+    ? 'Chaque trait relevé nourrit le graphe (onglet Graphe). Astuce : suivez les arêtes réelles (tableaux, allèges, acrotères).'
+    : '';
+
+  // ── 4b · Volume 3D : arêtes reconstruites + fixation d'échelle ──
+  const t3=$('edges3d-table'); t3.innerHTML='';
+  const vs=$('vol-status');
+  if(vol && !vol.err){
+    const sc=getVolScale();
+    const axName={H:'X · horiz.', V:'Z · vert.', Z:'Y · prof.'};
+    const axVar={H:'--h', V:'--v', Z:'--z'};
+    vol.edges.forEach((E,i)=>{
+      if(!E.a) return;
+      const cur = sc.k!=null ? (E.len*sc.k) : null;
+      const isFix = sc.seg===E.seg;
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td><span style="display:inline-block;width:12px;height:3px;border-radius:2px;background:var(${axVar[E.axis]})"></span> A${i+1}${isFix?' 📌':''}</td>
+        <td class="dir">${axName[E.axis]}</td>
+        <td><input type="number" step="0.01" min="0" style="width:72px;padding:3px;font-size:11.5px"
+             value="${cur!=null?cur.toFixed(2):''}" placeholder="×${E.len.toFixed(2)}"></td><td>m</td>`;
+      tr.querySelector('input').onchange=ev=>{
+        const val=parseFloat(ev.target.value);
+        const p0=groupPhotos()[0];
+        if(val>0 && p0){ p0.scaleFix={seg:E.seg, val}; renderAll(); }
+      };
+      t3.appendChild(tr);
+    });
+    const placed=vol.edges.filter(e=>e.a).length;
+    vs.innerHTML = `<span style="color:#86efac">${placed} arête(s) 3D</span>`
+      + (vol.group>1 ? ` · ${vol.group} crops fusionnés (même panorama)` : '')
+      + (sc.k==null ? ' · <span style="color:#fde047">proportionnel — saisissez une longueur ci-dessus</span>' : ' · échelle fixée')
+      + (vol.unplaced ? ` · <span style="color:#fca5a5">${vol.unplaced} sommet(s) non relié(s)</span>` : '');
+  } else if(vol?.err==='need-edges'){
+    vs.innerHTML=`<span style="color:#fca5a5">Arêtes insuffisantes (H:${vol.nH} V:${vol.nV} prof:${vol.nZ})</span> — ≥2 H, ≥2 V, ≥1 profondeur, coins aimantés.`;
+  } else if(vol?.err==='no-f'){
+    vs.innerHTML='<span style="color:#fca5a5">Focale inconnue</span> — complétez les arêtes H/V, ou utilisez des captures Street View (focale exacte).';
+  } else {
+    vs.textContent='';
+  }
+  $('ok-3d').style.display = (vol && !vol.err && getVolScale().k!=null) ? 'inline' : 'none';
+
+  // ── 4c · Faces typées + percements ──
+  const ft=$('faces-table'); ft.innerHTML='';
+  const pt2=$('perces-table'); pt2.innerHTML='';
+  if(vol && !vol.err){
+    const sc=getVolScale();
+    (vol.faces||[]).forEach((F,i)=>{
+      const A1=AXC[F.axes[0]], A2=AXC[F.axes[1]];
+      const us=F.pts.map(q=>q[A1]), vs2=F.pts.map(q=>q[A2]);
+      const du=Math.max(...us)-Math.min(...us), dv=Math.max(...vs2)-Math.min(...vs2);
+      const dims = sc.k!=null ? `${fmt(du*sc.k)} × ${fmt(dv*sc.k)}` : `×${du.toFixed(2)} × ×${dv.toFixed(2)}`;
+      const tr=document.createElement('tr');
+      tr.innerHTML=`<td>F${i+1}</td>
+        <td><select style="background:#0b1622;color:#fff;border:1px solid #274a73;border-radius:4px;font-size:11px;padding:2px">
+          ${['mur','toiture','dalle','off'].map(t=>`<option value="${t}"${F.type===t?' selected':''}>${t==='off'?'ignorer':t}</option>`).join('')}
+        </select></td>
+        <td class="val" style="color:#e2e8f0">${dims}</td>`;
+      tr.querySelector('select').onchange=ev=>{
+        const p0=groupPhotos()[0];
+        if(p0){ p0.faceTypes[F.fk]=ev.target.value; recompute(); }
+      };
+      ft.appendChild(tr);
+    });
+    (vol.perces||[]).forEach((Pr,i)=>{
+      const p0=groupPhotos()[0];
+      const tr=document.createElement('tr');
+      if(!Pr.face){
+        tr.innerHTML=`<td>P${i+1}</td><td class="dir" colspan="2" style="color:#fca5a5">hors face — retracez</td><td class="del">✕</td>`;
+      } else {
+        const fi=vol.faces.indexOf(Pr.face)+1;
+        const dims=sc.k!=null ? `${fmt(Pr.w*sc.k)} × ${fmt(Pr.h*sc.k)}` : `×${Pr.w.toFixed(2)} × ×${Pr.h.toFixed(2)}`;
+        const al=(Pr.allege!=null && sc.k!=null) ? ` · allège ${fmt(Pr.allege*sc.k)}` : '';
+        tr.innerHTML=`<td>P${i+1}</td><td class="dir">F${fi}</td><td class="val" style="color:#ef4444">${dims}${al}</td><td class="del">✕</td>`;
+      }
+      tr.querySelector('.del').onclick=()=>{ p0.percePts.splice(p0.percePts.indexOf(Pr.pp),1); recompute(); };
+      pt2.appendChild(tr);
+    });
+  }
+}
+function renderAll(){ renderPanels(); draw(); }
+
+// ── Exports ──────────────────────────────────────────────────────────────────
+function exportDXF(){
+  const gs=graphSegs();
+  if(!gs.length){ alert('Aucune cote relevée — le graphe est vide.'); return; }
+  let xs=[],ys=[];
+  gs.forEach(s=>{ xs.push(s.a[0],s.b[0]); ys.push(s.a[1],s.b[1]); });
+  const minx=Math.min(...xs), miny=Math.min(...ys);
+  const line=(x1,y1,x2,y2,lay)=>`0\nLINE\n8\n${lay}\n10\n${x1.toFixed(1)}\n20\n${y1.toFixed(1)}\n11\n${x2.toFixed(1)}\n21\n${y2.toFixed(1)}\n`;
+  const text=(x,y,h,str,lay)=>`0\nTEXT\n8\n${lay}\n10\n${x.toFixed(1)}\n20\n${y.toFixed(1)}\n40\n${h}\n1\n${str}\n`;
+  let s='0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n';
+  gs.forEach(g=>{
+    const ax=(g.a[0]-minx)*1000, ay=(g.a[1]-miny)*1000, bx=(g.b[0]-minx)*1000, by=(g.b[1]-miny)*1000;
+    s+=line(ax,ay,bx,by, g.ref?'REFERENCE':'RELEVE');
+    s+=text((ax+bx)/2, (ay+by)/2+60, 120, g.txt.replace(/·/g,'-'), 'COTES');
+  });
+  s+='0\nENDSEC\n0\nEOF\n';
+  const a=document.createElement('a');
+  a.download=`cotation_facade_${(P()?.name||'photo').replace(/\.[^.]+$/,'')}.dxf`;
+  a.href=URL.createObjectURL(new Blob([s],{type:'application/dxf'}));
+  a.click();
+}
+function exportPNG(){
+  if(view!=='graph') showView('graph');
+  const a=document.createElement('a');
+  a.download='cotation_facade_graphe.png';
+  a.href=cv.toDataURL('image/png');
+  a.click();
+}
+
+// ── Intégration photo-relevé : réception des photos (même protocole que 2D) ──
+window.addEventListener('message', ev=>{
+  if(ev.data?.type!=='facade2d-load' || !Array.isArray(ev.data.payload)) return;
+  addFiles(ev.data.payload.filter(it=>it && it.file));
+});
+try{ (window.opener||window.parent)?.postMessage({type:'cotation-ready'},'*'); }catch{}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+resizeCanvas();
+renderAll();
+</script>
+</body>
+</html>

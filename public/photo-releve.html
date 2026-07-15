@@ -589,10 +589,14 @@ body { font-family: system-ui, sans-serif; background: #f8fafc; color: #1e293b; 
     </div><!-- /opts-3d -->
 
     <div id="opts-2d" class="hidden">
-      <div class="card" style="padding:0;overflow:hidden">
-        <iframe id="facade2d-frame" src="facade-2d.html" style="width:100%;height:78vh;border:0;display:block"></iframe>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="btn btn-outline" id="atelier-cotation" onclick="switchAtelier2D('cotation')" style="flex:1">🎯 Cotation perspective (lignes de fuite → cotes → DXF)</button>
+        <button class="btn btn-outline" id="atelier-assemblage" onclick="switchAtelier2D('assemblage')" style="flex:1">🧩 Assemblage / redressement (élévation image)</button>
       </div>
-      <div style="font-size:12px;color:var(--gray);margin-top:8px">Les photos chargées à l'étape 1 sont transmises à l'atelier. Redresse chaque photo (4 points + cotes IGN/cote), assemble, puis exporte en PNG ou DXF.</div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <iframe id="facade2d-frame" src="cotation-facade.html" style="width:100%;height:78vh;border:0;display:block"></iframe>
+      </div>
+      <div style="font-size:12px;color:var(--gray);margin-top:8px" id="atelier-hint">Cotation : tracez ≥2 arêtes horizontales + ≥2 verticales, une cote connue, puis relevez — chaque trait donne sa dimension réelle et nourrit le graphe exportable DXF.</div>
     </div>
 
     <div class="actions">
@@ -1188,6 +1192,22 @@ function setRenderMode(m) {
 // 3D↔2D sans effacer le travail de redressement déjà fait. Re-envoie seulement
 // si le nombre de photos a changé (nouvel ajout à l'étape 1).
 let _2dSentCount = -1;
+// Deux ateliers partagent l'iframe et le même protocole postMessage
+// 'facade2d-load' : cotation-facade.html (défaut) et facade-2d.html (historique).
+function switchAtelier2D(which) {
+  const fr = document.getElementById('facade2d-frame');
+  const src = which === 'assemblage' ? 'facade-2d.html' : 'cotation-facade.html';
+  document.getElementById('atelier-cotation').classList.toggle('btn-primary', which !== 'assemblage');
+  document.getElementById('atelier-assemblage').classList.toggle('btn-primary', which === 'assemblage');
+  document.getElementById('atelier-hint').textContent = which === 'assemblage'
+    ? "Assemblage : redresse chaque photo (4 points + cotes IGN/cote), assemble, puis exporte en PNG ou DXF."
+    : "Cotation : tracez ≥2 arêtes horizontales + ≥2 verticales, une cote connue, puis relevez — chaque trait donne sa dimension réelle et nourrit le graphe exportable DXF.";
+  if (fr.getAttribute('src') === src) return;
+  fr.setAttribute('src', src);
+  _2dSentCount = -1;
+  fr.addEventListener('load', () => sendPhotosTo2D(), { once: true });
+}
+window.switchAtelier2D = switchAtelier2D;
 function sendPhotosTo2D() {
   if (_2dSentCount === files.length) return;
   _2dSentCount = files.length;
@@ -1532,6 +1552,9 @@ async function open2DFromStorage(id) {
       dl.push(new File([b], n, { type: b.type || 'image/jpeg' }));
     }
     files = dl; gpsData = new Array(dl.length).fill(null); releveId = id; _2dSentCount = -1;
+    // Relire l'EXIF GPS des JPEG rapatriés (writeGeoExifJpeg l'a injecté à la
+    // capture) AVANT l'envoi à l'atelier 2D — sinon meta:null → auto-assemblage KO.
+    await extractGPS(0);
     document.getElementById('mes-releves').classList.add('hidden');
     goStep(2); setRenderMode('2d');
   } catch (e) { alert('Erreur ouverture 2D : ' + e.message); }
@@ -1755,13 +1778,13 @@ const SV_PROXY = 'https://fnfrusblyzndbzckkfir.supabase.co/functions/v1/streetvi
 // metadata : énumération des panos (JSON). key vide → proxy capinsitu.
 function svMetaUrl(loc, radius, key) {
   return key
-    ? `https://maps.googleapis.com/maps/api/streetview/metadata?location=${loc}&radius=${radius}&key=${key}`
+    ? `https://maps.googleapis.com/maps/api/streetview/metadata?location=${loc}&radius=${radius}&source=outdoor&key=${key}`
     : `${SV_PROXY}?mode=metadata&location=${loc}&radius=${radius}`;
 }
 // image perspective d'un pano exact. key vide → proxy capinsitu.
 function svImgUrl(pano, heading, fov, pitch, size, key) {
   return key
-    ? `https://maps.googleapis.com/maps/api/streetview?size=${size}&pano=${pano}&heading=${heading}&fov=${fov}&pitch=${pitch}&key=${key}`
+    ? `https://maps.googleapis.com/maps/api/streetview?size=${size}&pano=${pano}&heading=${heading}&fov=${fov}&pitch=${pitch}&source=outdoor&key=${key}`
     : `${SV_PROXY}?pano=${pano}&size=${size}&heading=${heading}&fov=${fov}&pitch=${pitch}`;
 }
 
@@ -2167,7 +2190,9 @@ async function captureSvView(pv, status) {
       blob = await writeGeoExifJpeg(blob, pv.lat, pv.lng, c.fov);
       const idShort = (panoId || 'url').substring(0, 8);
       files.push(new File([blob], `facade_gsv_cadree_${idShort}_h${heading}_${files.length + 1}.jpg`, { type: 'image/jpeg' }));
-      gpsData.push({ lat: pv.lat, lon: pv.lng });
+      // pano/heading/pitch/fov : crops d'un même pano = même centre optique →
+      // l'atelier cotation fusionne leurs tracés en rayons (calibration exacte).
+      gpsData.push({ lat: pv.lat, lon: pv.lng, pano: panoId || null, heading, pitch: Math.round(c.p), fov: Math.round(c.fov), size: 640 });
       added++;
     } catch (e) { console.warn('[capture cadrée] crop ignoré :', e.message); }
   }
@@ -2225,7 +2250,7 @@ async function openSvEmbed() {
   // Erreur de clé restreinte : Google appelle ce hook global après le rendu.
   window.gm_authFailure = () => {
     st.style.color = '#c0392b';
-    st.innerHTML = "Clé Maps JS non autorisée pour ce domaine — ajoutez <b>bc-archi-v2.vercel.app</b> aux référents autorisés de la clé (console Google Cloud), ou utilisez le collage d'URL ci-dessus.";
+    st.innerHTML = `Clé Maps JS non autorisée pour ce domaine — ajoutez <b>${location.host}</b> aux référents autorisés de la clé (console Google Cloud), ou utilisez le collage d'URL ci-dessus.`;
   };
   // Position de départ : marqueur cible, sinon adresse, sinon défaut.
   let start = null;
@@ -2234,8 +2259,16 @@ async function openSvEmbed() {
   if (!start) { st.textContent = "Choisissez d'abord une adresse cible ci-dessus."; return; }
   try {
     await loadMapsApi();
+    // source OUTDOOR : exclut les photospheres intérieures des commerces —
+    // on cherche le pano voiture Google le plus proche, pas le pano le plus proche.
+    const svc = new google.maps.StreetViewService();
+    const { data } = await svc.getPanorama({
+      location: start, radius: 150,
+      source: google.maps.StreetViewSource.OUTDOOR,
+      preference: google.maps.StreetViewPreference.NEAREST,
+    });
     _svPano = new google.maps.StreetViewPanorama(document.getElementById('sv-embed'), {
-      position: start,
+      pano: data.location.pano,
       pov: { heading: onlineState.heading || 0, pitch: 0 },
       zoom: 1, addressControl: false, fullscreenControl: false, motionTracking: false,
     });
@@ -2295,7 +2328,7 @@ async function injectOnlinePhotos() {
           const vBlob = await writeGeoExifJpeg(await rv.blob(), p.lat, p.lng, p.fov || 90);
           const fileName = `facade_gsv_${v.name}_${p.id.substring(0, 8)}_${count + 1}.jpg`;
           files.push(new File([vBlob], fileName, { type: 'image/jpeg' }));
-          gpsData.push({ lat: p.lat, lon: p.lng });
+          gpsData.push({ lat: p.lat, lon: p.lng, pano: p.id, heading: ((Math.round(p.heading + v.yaw) % 360) + 360) % 360, pitch, fov: p.fov || 90, size: 640 });
           count++;
         }
         rawCount++;
@@ -2349,8 +2382,9 @@ async function injectOnlinePhotos() {
           const file = new File([pBlob], fileName, { type: 'image/jpeg' });
 
           files.push(file);
-          // Mettre à jour les métadonnées GPS avec l'angle de prise de vue réel
-          gpsData.push({ lat: p.lat, lon: p.lng });
+          // Crops projetés du même pano équirect : même centre → mêmes métadonnées
+          // de rotation pour la fusion multi-crop de l'atelier cotation.
+          gpsData.push({ lat: p.lat, lon: p.lng, pano: p.id, heading: ((Math.round(angle.yaw) % 360) + 360) % 360, pitch: basePitch, fov: PANO_PROJ_FOV, size: PANO_PROJ_W });
           count++;
         }
       } else {
