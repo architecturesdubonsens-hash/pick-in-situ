@@ -47,7 +47,9 @@
   .refrow{ display:grid; grid-template-columns:1fr 74px 20px; gap:6px; align-items:center; margin:4px 0; font-size:11.5px; }
   .refrow input{ padding:4px 6px; font-size:11.5px; }
   .refrow .del{ color:#fca5a5; cursor:pointer; text-align:center; }
-  .tabs{ position:absolute; top:8px; left:50%; transform:translateX(-50%); z-index:6; display:flex; width:240px; gap:4px; }
+  .wrap.nopanel{ grid-template-columns:1fr; }   /* le stage devient l'unique colonne */
+  .wrap.nopanel .panel{ display:none; }
+  .tabs{ position:absolute; top:8px; left:50%; transform:translateX(-50%); z-index:6; display:flex; width:300px; gap:4px; }
   .tab{ flex:1; text-align:center; padding:6px; font-size:12px; border-radius:6px; background:#16283ccc; color:#93c5fd; cursor:pointer; border:1px solid #1e3a5f; }
   .tab.active{ background:var(--orange); color:#fff; font-weight:700; border-color:var(--orange); }
   #loupe{ position:absolute; top:8px; right:8px; width:160px; height:160px; border:2px solid var(--orange); border-radius:8px; background:#000; display:none; z-index:7; pointer-events:none; }
@@ -118,6 +120,8 @@
       <div class="tab" id="tab-graph" onclick="showView('graph')">Graphe</div>
       <div class="tab" id="tab-3d" onclick="showView('3d')">3D</div>
       <div class="tab" style="flex:0 0 34px" title="Ajuster la vue (double-clic sur l'image aussi)" onclick="fitPhoto();draw()">⤢</div>
+      <div class="tab" style="flex:0 0 34px" title="Masquer/afficher le panneau latéral" onclick="togglePanel()">◧</div>
+      <div class="tab" style="flex:0 0 34px" title="Plein écran" onclick="toggleFullscreen()">⛶</div>
     </div>
     <canvas id="cv"></canvas>
     <canvas id="loupe" width="160" height="160"></canvas>
@@ -305,17 +309,25 @@ function recompute(){
   }
   let scale=null, su=null, sv=null;
   if(frame){
+    const sc2=[];
     for(const r of p.refs){
+      r.chk=null;
       if(!(r.len>0)) continue;
       const a=frame.toPlane(r.seg.x1,r.seg.y1), b=frame.toPlane(r.seg.x2,r.seg.y2);
       const dpl=Math.hypot(b[0]-a[0], b[1]-a[1]);
       if(dpl<1e-9) continue;
       r.dir=classifyDir(r.seg, vpH.v, vpV.v);
-      if(frame.type==='metric'){ scale = r.len/dpl; }                 // isotrope : la dernière gagne
+      if(frame.type==='metric'){ sc2.push({r, dpl}); }
       else {
         if(r.dir==='H') su = r.len/Math.abs(b[0]-a[0]);
         else if(r.dir==='V') sv = r.len/Math.abs(b[1]-a[1]);
       }
+    }
+    // isotrope : moyenne de TOUTES les refs (plus de "dernière gagne" silencieux),
+    // et contre-mesure r.chk de chacune → l'écart saisi/mesuré devient visible
+    if(sc2.length){
+      scale = sc2.reduce((s,q)=>s+q.r.len/q.dpl, 0)/sc2.length;
+      for(const q of sc2) q.r.chk = q.dpl*scale;
     }
   }
   // longueur métrique d'un segment (null si l'échelle manque)
@@ -578,13 +590,14 @@ function getVolScale(){
   return E ? {k:fix.val/E.len, seg:fix.seg} : {k:null};
 }
 function draw3D(){
-  ctx.clearRect(0,0,cv.width,cv.height);
+  resetT();
+  ctx.clearRect(0,0,VW,VH);
   ctx.font='13px Arial'; ctx.textAlign='center'; ctx.fillStyle='#475569';
-  if(!vol){ ctx.fillText('Tracez les arêtes du volume : ≥2 horizontales, ≥2 verticales, ≥1 profondeur — coins aimantés.', cv.width/2, cv.height/2); return; }
-  if(vol.err==='no-f'){ ctx.fillText('Focale inconnue — complétez les arêtes H et V (calibration), ou utilisez des captures Street View.', cv.width/2, cv.height/2); return; }
-  if(vol.err==='need-edges'){ ctx.fillText(`Arêtes insuffisantes (H:${vol.nH} V:${vol.nV} prof:${vol.nZ}) — il faut ≥2 H, ≥2 V, ≥1 profondeur.`, cv.width/2, cv.height/2); return; }
+  if(!vol){ ctx.fillText('Tracez les arêtes du volume : ≥2 horizontales, ≥2 verticales, ≥1 profondeur — coins aimantés.', VW/2, VH/2); return; }
+  if(vol.err==='no-f'){ ctx.fillText('Focale inconnue — complétez les arêtes H et V (calibration), ou utilisez des captures Street View.', VW/2, VH/2); return; }
+  if(vol.err==='need-edges'){ ctx.fillText(`Arêtes insuffisantes (H:${vol.nH} V:${vol.nV} prof:${vol.nZ}) — il faut ≥2 H, ≥2 V, ≥1 profondeur.`, VW/2, VH/2); return; }
   const placed=vol.edges.filter(e=>e.a&&e.b);
-  if(!placed.length){ ctx.fillText('Aucune arête connectée à l\'ancre — aimantez les coins entre eux.', cv.width/2, cv.height/2); return; }
+  if(!placed.length){ ctx.fillText('Aucune arête connectée à l\'ancre — aimantez les coins entre eux.', VW/2, VH/2); return; }
   const sc=getVolScale();
   const cy2=Math.cos(orbit.yaw), sy2=Math.sin(orbit.yaw), cp2=Math.cos(orbit.pitch), sp2=Math.sin(orbit.pitch);
   const rot=v=>{
@@ -594,8 +607,8 @@ function draw3D(){
   const pts=placed.flatMap(e=>[rot(e.a),rot(e.b)]);
   const xs=pts.map(q=>q[0]), ys=pts.map(q=>q[1]);
   const minx=Math.min(...xs), maxx=Math.max(...xs), miny=Math.min(...ys), maxy=Math.max(...ys);
-  const k=Math.min((cv.width-160)/Math.max(maxx-minx,1e-6), (cv.height-160)/Math.max(maxy-miny,1e-6))*zoom3d;
-  const px=v=>{ const r=rot(v); return [cv.width/2+(r[0]-(minx+maxx)/2)*k, cv.height/2-(r[1]-(miny+maxy)/2)*k]; };
+  const k=Math.min((VW-160)/Math.max(maxx-minx,1e-6), (VH-160)/Math.max(maxy-miny,1e-6))*zoom3d;
+  const px=v=>{ const r=rot(v); return [VW/2+(r[0]-(minx+maxx)/2)*k, VH/2-(r[1]-(miny+maxy)/2)*k]; };
   const colors={H:'#F97316', V:'#60a5fa', Z:'#a78bfa'};
   placed.forEach((e,i)=>{
     const [ax,ay]=px(e.a), [bx,by]=px(e.b);
@@ -621,7 +634,7 @@ function draw3D(){
   ctx.fillStyle='#94a3b8'; ctx.font='12px Arial'; ctx.textAlign='left';
   ctx.fillText(`${vol.group>1 ? vol.group+' crops du même panorama · ' : ''}${placed.length} arêtes · ${(vol.faces||[]).length} face(s) · ${(vol.perces||[]).filter(q=>q.rect).length} percement(s) · `
     + (sc.k!=null ? 'échelle fixée (ajustable en 4b)' : 'PROPORTIONNEL — saisissez une longueur en 4b')
-    + (vol.unplaced ? ` · ${vol.unplaced} sommet(s) non relié(s) à l'ancre` : ''), 14, cv.height-14);
+    + (vol.unplaced ? ` · ${vol.unplaced} sommet(s) non relié(s) à l'ancre` : ''), 14, VH-14);
 }
 function exportDXF3D(){
   const placed=(vol&&!vol.err) ? vol.edges.filter(e=>e.a&&e.b) : [];
@@ -837,16 +850,32 @@ function clearPhotoState(){
 }
 
 // ── Vue photo : zoom / pan ───────────────────────────────────────────────────
+// VW/VH : taille CSS du viewport. Le bitmap est en px physiques (DPR) pour un
+// rendu net ; toutes les coordonnées de travail restent en px CSS.
+let VW=0, VH=0, DPR=1;
+const resetT=()=>ctx.setTransform(DPR,0,0,DPR,0,0);
 function resizeCanvas(){
   const r=$('stage').getBoundingClientRect();
-  cv.width=r.width; cv.height=r.height;
+  if(!r.width || !r.height) return;
+  DPR=window.devicePixelRatio||1;
+  VW=r.width; VH=r.height;
+  cv.width=Math.round(r.width*DPR); cv.height=Math.round(r.height*DPR);
   draw();
 }
 addEventListener('resize', resizeCanvas);
+new ResizeObserver(resizeCanvas).observe($('stage'));   // iframe affichée/masquée, panneau replié…
+function togglePanel(){
+  document.querySelector('.wrap').classList.toggle('nopanel');
+  resizeCanvas(); fitPhoto(); draw();     // sans attendre le ResizeObserver
+}
+function toggleFullscreen(){
+  if(document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(()=>{});
+}
 function fitPhoto(){
   const p=P(); if(!p) return;
-  const s=Math.min(cv.width/p.img.naturalWidth, cv.height/p.img.naturalHeight)*0.96;
-  cam={ s, ox:(cv.width-p.img.naturalWidth*s)/2, oy:(cv.height-p.img.naturalHeight*s)/2 };
+  const s=Math.min(VW/p.img.naturalWidth, VH/p.img.naturalHeight)*0.96;
+  cam={ s, ox:(VW-p.img.naturalWidth*s)/2, oy:(VH-p.img.naturalHeight*s)/2 };
 }
 const toScreen=(x,y)=>[x*cam.s+cam.ox, y*cam.s+cam.oy];
 const toImage=(X,Y)=>[(X-cam.ox)/cam.s, (Y-cam.oy)/cam.s];
@@ -982,15 +1011,17 @@ function hitEndpoint(X,Y){
 function draw(){
   if(view==='graph'){ drawGraph(); return; }
   if(view==='3d'){ draw3D(); return; }
-  ctx.clearRect(0,0,cv.width,cv.height);
+  resetT();
+  ctx.clearRect(0,0,VW,VH);
   const p=P();
   if(!p){
     ctx.fillStyle='#475569'; ctx.font='14px Arial'; ctx.textAlign='center';
-    ctx.fillText('Chargez des photos pour commencer', cv.width/2, cv.height/2);
+    ctx.fillText('Chargez des photos pour commencer', VW/2, VH/2);
     return;
   }
   ctx.save();
-  ctx.setTransform(cam.s,0,0,cam.s,cam.ox,cam.oy);
+  ctx.setTransform(cam.s*DPR,0,0,cam.s*DPR,cam.ox*DPR,cam.oy*DPR);
+  ctx.imageSmoothingEnabled = cam.s<1;      // zoom fort : pixels nets pour viser les arêtes
   ctx.drawImage(p.img,0,0);
   ctx.restore();
 
@@ -1065,14 +1096,32 @@ function draw(){
     if(pipeline.vpV) vpIndicator(pipeline.vpV.v, CVc, 'PF·V');
   }
 
-  // segment en cours (élastique)
+  // cible d'aimantation : le point réellement enregistré au clic est montré AVANT
+  // le clic (cercle vert) — plus de téléportation silencieuse du tracé
+  let snapT=null;
+  if(mode!=='pan' && mouse.over){
+    snapT=snapPoint(mouse.x,mouse.y);
+    if(snapT){
+      const [sx,sy]=toScreen(snapT.x,snapT.y);
+      ctx.strokeStyle=CR; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(sx,sy,8,0,7); ctx.stroke();
+    }
+  }
+  // segment en cours (élastique) — aboutit sur la cible aimantée, pas sur le curseur
   if(pending && mouse.over){
     const [a,b]=toScreen(pending.x,pending.y);
-    const color = mode==='H'?CH : mode==='V'?CVc : mode==='ref'?CR : CM;
+    const [tx,ty]= snapT ? toScreen(snapT.x,snapT.y) : [mouse.x,mouse.y];
+    const color = mode==='H'?CH : mode==='V'?CVc : mode==='Z'?CZ : mode==='ref'?CR : CM;
     ctx.strokeStyle=color; ctx.lineWidth=2; ctx.setLineDash([4,4]);
-    ctx.beginPath(); ctx.moveTo(a,b); ctx.lineTo(mouse.x,mouse.y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(a,b); ctx.lineTo(tx,ty); ctx.stroke();
     ctx.setLineDash([]);
     ctx.fillStyle=color; ctx.beginPath(); ctx.arc(a,b,4,0,7); ctx.fill();
+    // cote provisoire pendant le relevé : ce qu'on lira au clic, pas après
+    if(mode==='mes' && pipeline?.ready){
+      const [ix,iy]= snapT ? [snapT.x,snapT.y] : toImage(mouse.x,mouse.y);
+      const L=pipeline.segLen({x1:pending.x, y1:pending.y, x2:ix, y2:iy});
+      if(L!=null) label({x1:pending.x, y1:pending.y, x2:ix, y2:iy}, fmt(L), CM);
+    }
   }
   drawLoupe();
 }
@@ -1082,7 +1131,7 @@ function vpIndicator(v, color, name){
   if(Math.abs(v[2])<1e-12) return;
   const [X,Y]=toScreen(v[0]/v[2], v[1]/v[2]);
   ctx.font='bold 11px Arial'; ctx.textAlign='center';
-  if(X>=0&&X<=cv.width&&Y>=0&&Y<=cv.height){
+  if(X>=0&&X<=VW&&Y>=0&&Y<=VH){
     ctx.strokeStyle=color; ctx.lineWidth=1.5;
     ctx.beginPath(); ctx.arc(X,Y,7,0,7); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(X-11,Y); ctx.lineTo(X+11,Y); ctx.moveTo(X,Y-11); ctx.lineTo(X,Y+11); ctx.stroke();
@@ -1090,9 +1139,9 @@ function vpIndicator(v, color, name){
     return;
   }
   // hors champ : flèche au bord dans sa direction
-  const cx0=cv.width/2, cy0=cv.height/2;
+  const cx0=VW/2, cy0=VH/2;
   const dx=X-cx0, dy=Y-cy0, n=Math.hypot(dx,dy)||1e-9;
-  const t=Math.min((cv.width/2-18)/Math.abs(dx||1e-9), (cv.height/2-18)/Math.abs(dy||1e-9));
+  const t=Math.min((VW/2-18)/Math.abs(dx||1e-9), (VH/2-18)/Math.abs(dy||1e-9));
   const ax=cx0+dx*t, ay=cy0+dy*t;
   ctx.save();
   ctx.translate(ax,ay); ctx.rotate(Math.atan2(dy,dx));
@@ -1104,17 +1153,46 @@ function vpIndicator(v, color, name){
   ctx.fillText(`${name} ${distPx>9999?'∞':distPx+' px'}`, ax-Math.sign(dx)*34, ay-Math.sign(dy)*10);
 }
 
-// loupe ×3 pendant les tracés — précision sans zoomer/dézoomer sans arrêt
+// loupe pendant les tracés — échantillonne l'IMAGE NATIVE (pas le canvas déjà
+// réduit) : la précision de visée ne dépend plus du zoom d'affichage
 function drawLoupe(){
-  const activeTrace = mode!=='pan' && mouse.over;
+  const p=P();
+  const activeTrace = view==='photo' && mode!=='pan' && mouse.over && p;
   loupe.style.display = activeTrace ? 'block' : 'none';
   if(!activeTrace) return;
-  const R=27;
-  lctx.imageSmoothingEnabled=false;
+  const [ix,iy]=toImage(mouse.x,mouse.y);
+  const Z=Math.max(4, cam.s*3);                 // grossissement mini ×4 natif
+  const Rimg=80/Z;
+  const k=160/(Rimg*2);
+  lctx.imageSmoothingEnabled = Z<4;
   lctx.clearRect(0,0,160,160);
-  lctx.drawImage(cv, mouse.x-R, mouse.y-R, R*2, R*2, 0, 0, 160, 160);
+  lctx.drawImage(p.img, ix-Rimg, iy-Rimg, Rimg*2, Rimg*2, 0, 0, 160, 160);
+  // arêtes existantes traversant la fenêtre de loupe (repères de continuité)
+  const inl=(x,y)=>[(x-(ix-Rimg))*k, (y-(iy-Rimg))*k];
+  const css=getComputedStyle(document.documentElement);
+  const cols={H:css.getPropertyValue('--h').trim(), V:css.getPropertyValue('--v').trim(), Z:css.getPropertyValue('--z').trim()};
+  [['H',p.segsH],['V',p.segsV],['Z',p.segsZ]].forEach(([ax,list])=>{
+    lctx.strokeStyle=cols[ax]; lctx.lineWidth=1.5; lctx.globalAlpha=0.8;
+    for(const s of list){
+      const [a,b]=inl(s.x1,s.y1), [c,d]=inl(s.x2,s.y2);
+      lctx.beginPath(); lctx.moveTo(a,b); lctx.lineTo(c,d); lctx.stroke();
+    }
+  });
+  lctx.globalAlpha=1;
+  // point de départ du segment en cours
+  if(pending){
+    const [a,b]=inl(pending.x,pending.y);
+    lctx.fillStyle='#F97316'; lctx.beginPath(); lctx.arc(a,b,4,0,7); lctx.fill();
+  }
+  // cible aimantée : cercle vert = le point qui sera réellement enregistré
+  const sn=snapPoint(mouse.x,mouse.y);
   lctx.strokeStyle='#F97316'; lctx.lineWidth=1;
   lctx.beginPath(); lctx.moveTo(80,0); lctx.lineTo(80,160); lctx.moveTo(0,80); lctx.lineTo(160,80); lctx.stroke();
+  if(sn){
+    const [sx,sy]=inl(sn.x,sn.y);
+    lctx.strokeStyle='#22c55e'; lctx.lineWidth=2;
+    lctx.beginPath(); lctx.arc(sx,sy,9,0,7); lctx.stroke();
+  }
 }
 
 // ── Rendu vue graphe ─────────────────────────────────────────────────────────
@@ -1134,13 +1212,14 @@ function graphSegs(){
   return out;
 }
 function drawGraph(){
-  ctx.clearRect(0,0,cv.width,cv.height);
+  resetT();
+  ctx.clearRect(0,0,VW,VH);
   const gs=graphSegs();
   if(!gs.length){
     ctx.fillStyle='#475569'; ctx.font='14px Arial'; ctx.textAlign='center';
     ctx.fillText(pipeline?.ready ? 'Relevez des cotes (étape 4) — elles apparaîtront ici à l\'échelle.'
                                  : 'Complétez arêtes de fuite + cote de référence pour activer le graphe.',
-                 cv.width/2, cv.height/2);
+                 VW/2, VH/2);
     return;
   }
   // bornes (plan déjà orienté y vers le haut)
@@ -1148,17 +1227,17 @@ function drawGraph(){
   gs.forEach(s=>{ xs.push(s.a[0],s.b[0]); ys.push(s.a[1],s.b[1]); });
   const minx=Math.min(...xs), maxx=Math.max(...xs), miny=Math.min(...ys), maxy=Math.max(...ys);
   const W=Math.max(maxx-minx,0.5), Hh=Math.max(maxy-miny,0.5);
-  const k=Math.min((cv.width-120)/W, (cv.height-120)/Hh);
-  const px=(x,y)=>[60+(x-minx)*k, cv.height-60-(y-miny)*k];
+  const k=Math.min((VW-120)/W, (VH-120)/Hh);
+  const px=(x,y)=>[60+(x-minx)*k, VH-60-(y-miny)*k];
   const ext=Math.max(W,Hh);
   const step= ext>60?10 : ext>30?5 : ext>15?2 : 1;
   ctx.strokeStyle='rgba(147,197,253,.15)'; ctx.fillStyle='#64748b'; ctx.font='10px Arial'; ctx.lineWidth=1; ctx.textAlign='left';
   for(let m=Math.ceil(minx/step)*step; m<=maxx; m+=step){
-    const [X]=px(m,0); ctx.beginPath(); ctx.moveTo(X,20); ctx.lineTo(X,cv.height-40); ctx.stroke();
-    ctx.fillText(m.toFixed(0)+' m', X+2, cv.height-44);
+    const [X]=px(m,0); ctx.beginPath(); ctx.moveTo(X,20); ctx.lineTo(X,VH-40); ctx.stroke();
+    ctx.fillText(m.toFixed(0)+' m', X+2, VH-44);
   }
   for(let m=Math.ceil(miny/step)*step; m<=maxy; m+=step){
-    const Y=px(0,m)[1]; ctx.beginPath(); ctx.moveTo(40,Y); ctx.lineTo(cv.width-20,Y); ctx.stroke();
+    const Y=px(0,m)[1]; ctx.beginPath(); ctx.moveTo(40,Y); ctx.lineTo(VW-20,Y); ctx.stroke();
     ctx.fillText(m.toFixed(0)+' m', 4, Y-2);
   }
   // segments
@@ -1175,7 +1254,7 @@ function drawGraph(){
     ctx.fillStyle=s.ref?'#22c55e':'#fde047'; ctx.fillText(s.txt,mx,my-5);
   });
   // barre d'échelle
-  const bm=step, bp=bm*k, sx=60, sy=cv.height-24;
+  const bm=step, bp=bm*k, sx=60, sy=VH-24;
   ctx.fillStyle='rgba(255,255,255,.9)'; ctx.fillRect(sx-8,sy-16,bp+16,26);
   for(let i=0;i<4;i++){ ctx.fillStyle=i%2?'#fff':'#000'; ctx.fillRect(sx+i*bp/4,sy,bp/4,6); }
   ctx.strokeStyle='#000'; ctx.strokeRect(sx,sy,bp,6);
@@ -1213,10 +1292,15 @@ function renderPanels(){
   (p?.refs||[]).forEach((r,i)=>{
     const d=document.createElement('div'); d.className='refrow';
     const dirTxt=r.dir==='H'?'horizontale':r.dir==='V'?'verticale':'';
-    d.innerHTML=`<span>Cote réf. ${i+1} ${dirTxt?`<span class="badge" style="background:#1e3a5f">${dirTxt}</span>`:''}</span>
+    // écart saisi ↔ recalculé (>1 %) : révèle une ref douteuse ou des refs incompatibles
+    const dev = (r.chk!=null && r.len>0 && Math.abs(r.chk-r.len)/r.len>0.01)
+      ? ` <span class="badge" style="background:#7c2d12" title="valeur recalculée avec l'échelle moyenne — écart avec votre saisie">≈ ${fmt(r.chk)}</span>` : '';
+    d.innerHTML=`<span>Cote réf. ${i+1} ${dirTxt?`<span class="badge" style="background:#1e3a5f">${dirTxt}</span>`:''}${dev}</span>
                  <input type="number" step="0.01" min="0" placeholder="m" value="${r.len??''}">
                  <span class="del">✕</span>`;
-    d.querySelector('input').oninput=e=>{ r.len=parseFloat(e.target.value)||null; recompute(); };
+    // onchange (pas oninput) : recompute() reconstruit le panneau et volerait le
+    // focus à chaque frappe — la valeur serait tronquée en cours de saisie
+    d.querySelector('input').onchange=e=>{ r.len=parseFloat(e.target.value)||null; recompute(); };
     d.querySelector('.del').onclick=()=>{ p.refs.splice(i,1); recompute(); };
     rr.appendChild(d);
   });
