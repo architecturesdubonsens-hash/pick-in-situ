@@ -269,9 +269,11 @@ function buildMetricFrame(vh, vv, f, cx, cy, note){
   const Hpi=mul3(K, [[r1[0],r2[0],0],[r1[1],r2[1],0],[r1[2],r2[2],1]]);
   const Hip=inv3(Hpi);
   if(!Hip) return null;
+  const raw=(x,y)=>{ const q=apply3(Hip,[x-cx,y-cy,1]); return [q[0]/q[2], q[1]/q[2]]; };
   return {
     type:'metric', f, note,
-    toPlane:(x,y)=>{ const q=apply3(Hip,[x-cx,y-cy,1]); return [q[0]/q[2], q[1]/q[2]]; },
+    toPlane:raw, rawToPlane:raw,               // rawToPlane : jamais ré-orienté (règle de trois)
+    geom:{r1, r2, f, cx, cy},
   };
 }
 function calibrateMetric(vh, vv, vz, W, H){
@@ -333,11 +335,40 @@ function calibrateSV(p, W, H){
   const Hpi=mul3(K, [[r1[0],up[0],0],[r1[1],up[1],0],[r1[2],up[2],1]]);
   const Hip=inv3(Hpi);
   if(!Hip) return null;
+  const raw=(x,y)=>{ const q=apply3(Hip,[x-cx,y-cy,1]); return [q[0]/q[2], q[1]/q[2]]; };
   return {
     frame:{ type:'metric', f, sv:true,
-      toPlane:(x,y)=>{ const q=apply3(Hip,[x-cx,y-cy,1]); return [q[0]/q[2], q[1]/q[2]]; } },
+      toPlane:raw, rawToPlane:raw,             // rawToPlane : jamais ré-orienté (règle de trois)
+      geom:{r1, r2:up, f, cx, cy} },
     vpH:vhS, vpV:{v:vpOf(up), res:0}, vpZ:{v:vpOf(r3), res:0},
   };
+}
+
+// ── Règle de trois perspectiviste (construction classique du point de distance,
+// automatisée) : une cote de PROFONDEUR dont le 1er clic est posé SUR le plan de
+// façade (angle du bâtiment, tableau…) se déduit sans volume 3D ni cote
+// supplémentaire. Le 1er point est levé en 3D par l'homographie (l'échelle de la
+// cote de référence EST la distance métrique du plan) ; le 2e point est
+// l'intersection de son rayon avec la droite de profondeur issue du 1er.
+// Un trait de profondeur « flottant » (aucun point sur un plan connu) reste
+// indéterminé — deux objets de tailles différentes à des distances différentes
+// donnent la même image : il faut alors le volume 3D.
+function depthRule3(seg, frame, scale){
+  const g=frame?.geom;
+  if(!g || frame.type!=='metric' || !(scale>0) || !frame.rawToPlane) return null;
+  const {r1, r2, f, cx, cy}=g;
+  const r3=normv(cross(r1,r2));                              // direction de profondeur
+  const [X,Y]=frame.rawToPlane(seg.x1,seg.y1);
+  const P1=[ (X*r1[0]+Y*r2[0])*scale,                        // 1er clic levé sur le plan
+             (X*r1[1]+Y*r2[1])*scale,                        // de façade réel (caméra à
+             (X*r1[2]+Y*r2[2]+1)*scale ];                    // l'origine, mètres)
+  const v=normv([(seg.x2-cx)/f, (seg.y2-cy)/f, 1]);          // rayon du 2e clic
+  const c=dot3(v,r3), vP=dot3(v,P1), rP=dot3(r3,P1);
+  const den=1-c*c;
+  if(den<1e-6) return null;                                  // rayon ∥ profondeur
+  const t=(c*vP-rP)/den, s=vP+c*t;
+  if(s<=0) return null;                                      // derrière la caméra
+  return {L:Math.abs(t), mode:'z-r3'};
 }
 
 // ── Repli affine : [vph vpv centre]⁻¹ — échelles H et V indépendantes ────────
@@ -430,7 +461,12 @@ function recompute(){
     const dir=dirOfSeg(seg);
     const m3=measure3D(seg);
     if(m3 && m3.L!=null) return {...m3, dir};
-    if(dir==='Z') return {L:null, mode:'z-no3d', dir};
+    if(dir==='Z'){
+      // règle de trois : 1er clic supposé sur le plan de façade
+      const r3m=depthRule3(seg, frame, frame?.type==='metric' ? scale : null);
+      if(r3m) return {...r3m, dir};
+      return {L:null, mode:'z-no3d', dir};
+    }
     if(!frame) return null;
     const a=frame.toPlane(seg.x1,seg.y1), b=frame.toPlane(seg.x2,seg.y2);
     const du=b[0]-a[0], dv=b[1]-a[1];
@@ -941,7 +977,7 @@ const MODE_LABEL={
   V:'Tracez une arête VERTICALE réelle — 2 clics. Échap pour annuler.',
   Z:'Tracez une arête de PROFONDEUR (retour, pignon, tableau…) — 2 clics. Les coins s\'aimantent aux arêtes existantes.',
   ref:'Tracez la cote de référence sur un élément de dimension connue — 2 clics.',
-  mes:'Relevez une cote — 2 clics. La dimension s\'affiche instantanément.',
+  mes:'Relevez une cote — 2 clics. Cote de PROFONDEUR : commencez le trait sur le plan de façade (angle du bâtiment) — règle de trois automatique.',
   perce:'Percement : cliquez 2 coins OPPOSÉS de l\'ouverture sur la photo — la face hôte est détectée automatiquement.',
 };
 function setMode(m){
@@ -1460,8 +1496,10 @@ function renderPanels(){
     const fi=(info?.mode==='3d'&&vol&&!vol.err) ? vol.faces.indexOf(info.face)+1 : 0;
     const via=info?.mode==='3d'
       ? ` <span class="badge" style="background:#1e3a5f" title="mesurée sur la face F${fi} du volume 3D — valable hors du plan de façade">3D·F${fi}</span>`
+      : info?.mode==='z-r3'
+      ? ` <span class="badge" style="background:#14532d" title="profondeur déduite par règle de trois : le 1er clic est supposé posé SUR le plan de façade (angle du bâtiment). Pour un élément détaché de la façade, tracez le volume 3D (4b) — la mesure y sera rattachée à sa face.">règle de 3</span>`
       : info?.mode==='z-no3d'
-      ? ` <span class="badge" style="background:#7c2d12" title="une cote de profondeur ne peut PAS se mesurer dans le plan de façade — tracez le volume 3D (4b) : arêtes aimantées + une longueur connue">3D requis</span>` : '';
+      ? ` <span class="badge" style="background:#7c2d12" title="profondeur non mesurable : il manque l'échelle (cote de référence, étape 3) ou la calibration. Commencez le trait SUR le plan de façade (règle de trois) ou tracez le volume 3D (4b).">3D requis</span>` : '';
     const tr=document.createElement('tr');
     tr.innerHTML=`<td>C${i+1}</td><td class="dir">${dirTxt}${via}</td>
                   <td class="val">${L!=null?fmt(L):'—'}</td><td class="del">✕</td>`;
@@ -1504,7 +1542,7 @@ function renderPanels(){
   }
   $('ok-scale').style.display = pipeline?.ready?'inline':'none';
   $('mes-hint').textContent = pipeline?.ready
-    ? 'Chaque trait relevé nourrit le graphe (onglet Graphe). Les cotes hors du plan de façade (retrait, retour, profondeur) sont mesurées sur les faces du volume 3D (4b/4c) — badge 3D dans le tableau.'
+    ? 'Chaque trait relevé nourrit le graphe (onglet Graphe). Profondeur : partez du plan de façade (règle de trois automatique, badge « règle de 3 »). Éléments détachés de la façade (porte en retrait, retour) : mesurés sur les faces du volume 3D (4b/4c, badge 3D).'
     : '';
 
   // ── 4b · Volume 3D : arêtes reconstruites + fixation d'échelle ──
