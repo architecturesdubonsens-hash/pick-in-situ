@@ -1,25 +1,108 @@
 {
-  "_doc": "État de la synchronisation Drive↔GitHub — voir .claude/skills/sync-drive/SKILL.md. Mis à jour et commité à chaque synchro.",
-  "driveFolder": { "title": "pick in situ", "id": "1FZq0ZzE4twrKZLFbx7YZGSgnPOce_aII" },
-  "files": [
+  "_doc": "Registre de synchronisation Drive↔GitHub multi-projets — voir .claude/skills/sync-drive/SKILL.md. Référence : tableur Drive « Deploiements Vercel BC-Archi » (fileId 1By5PDBMVkYg1-xFRX5gaUI5F_64Cy30oJ2l3f3QEosg). Tous les dossiers projets sont sous le dossier Drive « claude » (18177G5wXO760JCQYhsMUDfa8sKgQ0hKM). Mis à jour et commité à chaque synchro.",
+  "projects": [
     {
-      "repoPath": "public/photo-releve.html",
-      "driveFileId": "1mjz3fWg1cTUwVWiUICSypORsIZPDpYuR",
-      "driveModifiedTime": "2026-07-16T07:43:04.174Z",
-      "baseCommit": "c898c3c",
-      "note": "Drive en retard sur GitHub (correctif Maps loading=async absent) — fichier à jour envoyé à l'utilisateur le 16/07 pour remplacement manuel dans Drive."
+      "name": "PickInSitu (relevé LiDAR)",
+      "repo": "architecturesdubonsens-hash/pick-in-situ",
+      "defaultBranch": "main",
+      "workflow": "branche claude/photo-releve-pick-situ-dq2hvc → PR → squash-merge",
+      "deploy": "https://pick-in-situ.vercel.app",
+      "driveFolder": { "title": "pick in situ", "id": "1FZq0ZzE4twrKZLFbx7YZGSgnPOce_aII" },
+      "files": [
+        {
+          "repoPath": "public/photo-releve.html",
+          "driveFileId": "1mjz3fWg1cTUwVWiUICSypORsIZPDpYuR",
+          "driveModifiedTime": "2026-07-16T07:43:04.174Z",
+          "baseCommit": "c898c3c",
+          "note": "Drive en retard sur GitHub (correctif Maps loading=async absent) — fichier à jour envoyé à l'utilisateur le 16/07 pour remplacement manuel dans Drive."
+        },
+        {
+          "repoPath": "public/cotation-facade.html",
+          "driveFileId": "1BWPkJhiUQ3zX9AUmpZR0-NK6ZGfsNObK",
+          "driveModifiedTime": "2026-07-16T08:44:46.322Z",
+          "baseCommit": "d499262"
+        },
+        {
+          "repoPath": ".claude/launch.json",
+          "driveFileId": "1OV06h_vJ239GZklgtMtALQvs61omLCD8",
+          "driveModifiedTime": "2026-07-16T07:45:59.684Z",
+          "baseCommit": "c898c3c"
+        }
+      ]
     },
     {
-      "repoPath": "public/cotation-facade.html",
-      "driveFileId": "1BWPkJhiUQ3zX9AUmpZR0-NK6ZGfsNObK",
-      "driveModifiedTime": "2026-07-16T08:44:46.322Z",
-      "baseCommit": "d499262"
+      "name": "CapInSitu (principal + Relevé BC photogrammétrie)",
+      "repo": "architecturesdubonsens-hash/bc-archi-capinsitu",
+      "defaultBranch": "master",
+      "workflow": "commit direct sur master (pas de PR)",
+      "deploy": "https://bc-archi-v2.vercel.app",
+      "driveFolder": { "title": "app-v3", "id": "1DgenqL5iyqv0fNhKKQtCsX8s7oxJm0zC" },
+      "files": [
+        {
+          "repoPath": "index.html",
+          "driveFileId": "1e9vgE5ECNh9ts1aZYXrJ5bCMJU53dVZQ",
+          "driveModifiedTime": "2026-07-16T13:02:57.309Z",
+          "baseCommit": "e6b4bda"
+        },
+        {
+          "repoPath": "modules/site.js",
+          "driveFileId": "1NksuXU3DfubSFZF-GLjhxVFqgHBjvW8U",
+          "driveModifiedTime": "2026-07-16T12:58:21.482Z",
+          "baseCommit": "e6b4bda"
+        }
+      ]
     },
     {
-      "repoPath": ".claude/launch.json",
-      "driveFileId": "1OV06h_vJ239GZklgtMtALQvs61omLCD8",
-      "driveModifiedTime": "2026-07-16T07:45:59.684Z",
-      "baseCommit": "c898c3c"
+      "name": "Génération (module IA CapInSitu)",
+      "repo": "architecturesdubonsens-hash/model-in-situ",
+      "defaultBranch": "à confirmer à la première synchro",
+      "workflow": "à confirmer à la première synchro",
+      "deploy": "https://model-in-situ.vercel.app",
+      "driveFolder": { "title": "model-in-situ", "id": "1RGZYdoNu1lQyBnQ_YIIS8gn6HWG6bq_P" },
+      "driveFolderSecondary": { "title": "génération", "id": "151OqztILS4jiqghg0G6x0OionQxmV6es" },
+      "files": []
+    },
+    {
+      "name": "Forme1 (coach sportif)",
+      "repo": "architecturesdubonsens-hash/forme1",
+      "defaultBranch": "à confirmer à la première synchro",
+      "workflow": "à confirmer à la première synchro",
+      "deploy": "https://forme1.vercel.app",
+      "driveFolder": { "title": "Forme1", "id": "1uGwORks2VKMZeleZ31hSD89amYkTrxcO" },
+      "files": []
+    },
+    {
+      "name": "Family Office",
+      "repo": "architecturesdubonsens-hash/family-office",
+      "defaultBranch": "à confirmer à la première synchro",
+      "workflow": "à confirmer à la première synchro",
+      "deploy": "https://family-office-architecturesdubonsens-hashs-projects.vercel.app (404 signalé dans le tableur — à corriger)",
+      "driveFolder": { "title": "family-office", "id": "1WHp3jaXuXE5RfYvzHiVehaBzakwuik_g" },
+      "files": []
+    },
+    {
+      "name": "Orbit (dev tracker)",
+      "repo": null,
+      "repoNote": "aucun dépôt GitHub correspondant identifié — demander à l'utilisateur à la première modification Drive",
+      "deploy": "https://orbit-tau-two.vercel.app",
+      "driveFolder": { "title": "orbit", "id": "1vW9kN2MqvVMSPm2_CNHS0vsuEvY2NInl" },
+      "files": []
+    },
+    {
+      "name": "VizInSitu",
+      "repo": null,
+      "repoNote": "statique Hostinger hors Vercel/GitHub — déploiement manuel ; signaler les modifications Drive à l'utilisateur sans commiter",
+      "deploy": "https://vizinsitu.com",
+      "driveFolder": { "title": "cloneclaude260517", "id": "1QN96-tCNZny1mTB_umsb74hfly2BPqLi" },
+      "files": []
+    },
+    {
+      "name": "messages",
+      "repo": "architecturesdubonsens-hash/unified-messaging",
+      "repoNote": "correspondance à confirmer (tableur : « non identifié », erreur 500 en prod)",
+      "deploy": "https://messages-nine-flame.vercel.app",
+      "driveFolder": null,
+      "files": []
     }
   ]
 }
