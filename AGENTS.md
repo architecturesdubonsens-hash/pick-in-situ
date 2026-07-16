@@ -6,9 +6,11 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 # Ouverture de session : synchronisation Drive ↔ GitHub
 
-L'utilisateur édite les fichiers de `public/` dans le dossier Google Drive
-« pick in situ ». À chaque ouverture de session (ou sur « synchronise »,
-« commite et push »), exécuter la skill **`sync-drive`**
-(`.claude/skills/sync-drive/SKILL.md`) : elle compare Drive et `origin/main`
-via `.drive-sync.json`, fusionne à 3 voies si les deux côtés ont changé, et
-décrit le flux commit → push → PR → squash-merge validé par l'utilisateur.
+L'utilisateur édite les fichiers de TOUS ses projets (PickInSitu, CapInSitu,
+Génération, Forme1, Family Office…) dans des dossiers Google Drive sous le
+dossier « claude ». À chaque ouverture de session (ou sur « synchronise »,
+« commite et push », « une modif a été faite »), exécuter la skill
+**`sync-drive`** (`.claude/skills/sync-drive/SKILL.md`) : elle rattache les
+fichiers Drive récemment modifiés à leur projet via le registre
+`.drive-sync.json`, fusionne à 3 voies si les deux côtés ont changé, et
+applique le workflow de commit/déploiement propre à chaque dépôt.
