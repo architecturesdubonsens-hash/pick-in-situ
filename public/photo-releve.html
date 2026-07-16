@@ -596,7 +596,7 @@ body { font-family: system-ui, sans-serif; background: #f8fafc; color: #1e293b; 
         <button class="btn btn-outline" id="atelier-assemblage" onclick="switchAtelier2D('assemblage')" style="flex:1">🧩 Assemblage / redressement (élévation image)</button>
       </div>
       <div class="card" style="padding:0;overflow:hidden">
-        <iframe id="facade2d-frame" src="cotation-facade.html" allowfullscreen allow="fullscreen" style="width:100%;height:calc(100vh - 190px);min-height:520px;border:0;display:block"></iframe>
+        <iframe id="facade2d-frame" src="cotation-facade.html" allow="fullscreen" style="width:100%;height:calc(100vh - 190px);min-height:520px;border:0;display:block"></iframe>
       </div>
       <div style="font-size:12px;color:var(--gray);margin-top:8px" id="atelier-hint">Cotation : tracez ≥2 arêtes horizontales + ≥2 verticales, une cote connue, puis relevez — chaque trait donne sa dimension réelle et nourrit le graphe exportable DXF.</div>
     </div>
@@ -2248,10 +2248,12 @@ function loadMapsApi() {
   if (window.google && window.google.maps) return Promise.resolve();
   if (_mapsApiPromise) return _mapsApiPromise;
   _mapsApiPromise = new Promise((resolve, reject) => {
+    // loading=async : chargement recommandé par Google — l'API prévient via le
+    // callback global quand elle est prête (s.onload ne suffit plus).
+    window.__mapsApiReady = () => { delete window.__mapsApiReady; resolve(); };
     const s = document.createElement('script');
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${MAPS_JS_KEY}&v=weekly`;
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${MAPS_JS_KEY}&v=weekly&loading=async&callback=__mapsApiReady`;
     s.async = true;
-    s.onload = () => resolve();
     s.onerror = () => reject(new Error('chargement Maps JS échoué'));
     document.head.appendChild(s);
   });
