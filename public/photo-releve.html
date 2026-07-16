@@ -437,6 +437,8 @@ body { font-family: system-ui, sans-serif; background: #f8fafc; color: #1e293b; 
               <button type="button" class="btn btn-primary" style="width:100%;margin-top:8px;font-size:11px;padding:6px" onclick="openSvEmbed()">🧭 Ouvrir Street View ici</button>
               <div id="sv-capture-status" style="font-size:10.5px;color:#666;min-height:13px;margin-top:5px"></div>
               <div id="sv-capture-preview" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px"></div>
+              <button type="button" id="sv-direct-cotation" class="btn hidden" style="width:100%;margin-top:8px;font-size:11px;padding:7px;background:#F97316;color:#fff;font-weight:700" onclick="openCotationDirect()">📐 Mesurer directement (cotation perspective)</button>
+              <div id="sv-direct-hint" class="hidden" style="font-size:10px;color:#5b6b7b;margin-top:3px;line-height:1.35">Sans photogrammétrie : les crops portent la focale et l'horizon exacts du panorama — 1 arête horizontale + 1 cote connue suffisent pour mesurer, profondeur comprise.</div>
             </div>
 
           </div>
@@ -1201,7 +1203,7 @@ function switchAtelier2D(which) {
   document.getElementById('atelier-assemblage').classList.toggle('btn-primary', which === 'assemblage');
   document.getElementById('atelier-hint').textContent = which === 'assemblage'
     ? "Assemblage : redresse chaque photo (4 points + cotes IGN/cote), assemble, puis exporte en PNG ou DXF."
-    : "Cotation : tracez ≥2 arêtes horizontales + ≥2 verticales, une cote connue, puis relevez — chaque trait donne sa dimension réelle et nourrit le graphe exportable DXF.";
+    : "Cotation : crops Street View → 1 arête horizontale + 1 cote connue suffisent (focale et horizon exacts du panorama). Photos classiques : ≥2 arêtes H + ≥2 V. Chaque trait donne sa dimension réelle (profondeur comprise via le volume 3D) et nourrit le graphe exportable DXF.";
   if (fr.getAttribute('src') === src) return;
   fr.setAttribute('src', src);
   _2dSentCount = -1;
@@ -1217,6 +1219,16 @@ function sendPhotosTo2D() {
   if (fr.contentWindow && fr.contentDocument?.readyState === 'complete') send();
   else fr.addEventListener('load', send, { once: true });
 }
+// Accès direct capture Street View → atelier cotation, SANS passer par la
+// photogrammétrie (upload / GPU) : les crops portent fov/pitch/heading exacts,
+// l'atelier calibre dès 1 arête horizontale et mesure aussi la profondeur.
+function openCotationDirect() {
+  goStep(2);
+  setRenderMode('2d');            // envoie les photos (+ meta pano) à l'iframe
+  switchAtelier2D('cotation');
+}
+window.openCotationDirect = openCotationDirect;
+
 // Repli depuis les résultats 3D décevants : mêmes photos (toujours en mémoire),
 // aucun rechargement.
 function fallbackTo2D() {
@@ -2203,6 +2215,9 @@ async function captureSvView(pv, status) {
     : 'Échec — aucune vue récupérée à cette position.';
 
   if (added) {
+    // accès direct : dès qu'un crop SV existe, la cotation est utilisable sans photogrammétrie
+    document.getElementById('sv-direct-cotation')?.classList.remove('hidden');
+    document.getElementById('sv-direct-hint')?.classList.remove('hidden');
     document.getElementById('stats-area').classList.remove('hidden');
     document.getElementById('stat-total').textContent = files.length;
     document.getElementById('stat-size').textContent = (files.reduce((a, f) => a + f.size, 0) / 1048576).toFixed(1);

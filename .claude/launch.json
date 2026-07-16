@@ -6,6 +6,12 @@
       "runtimeExecutable": "C:/tmp/start-pick-in-situ.cmd",
       "runtimeArgs": [],
       "port": 3002
+    },
+    {
+      "name": "static-public-mac",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8787", "--directory", "public"],
+      "port": 8787
     }
   ]
 }
