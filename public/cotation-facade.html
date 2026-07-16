@@ -70,7 +70,7 @@
     <div class="imglist" id="imglist"></div>
 
     <h3>2 · Arêtes de fuite <span class="ok" id="ok-vp" style="display:none">✓</span></h3>
-    <div class="hint">Tracez <b>≥ 2 arêtes réelles</b> par famille (linteaux, corniches, joints… / montants, chaînes d'angle…). Le point de fuite est calculé — inutile qu'il soit dans l'image. Molette = zoom, clic droit = déplacer.</div>
+    <div class="hint">Tracez <b>≥ 2 arêtes réelles</b> par famille (linteaux, corniches, joints… / montants, chaînes d'angle…). Le point de fuite est calculé — inutile qu'il soit dans l'image. Les arêtes de <b>profondeur</b> renforcent la calibration (3ᵉ PF : focale + point principal). <b>Capture Street View : 1 seule arête horizontale suffit</b> (focale, verticale et horizon exacts du panorama). Molette = zoom, clic droit = déplacer.</div>
     <button class="btn" id="btn-H" onclick="setMode('H')">━ Tracer des arêtes <b style="color:var(--h)">horizontales</b> — axe X</button>
     <div class="seglist" id="list-H"></div>
     <button class="btn" id="btn-V" onclick="setMode('V')">┃ Tracer des arêtes <b style="color:var(--v)">verticales</b> — axe Z</button>
@@ -132,14 +132,23 @@
 <script>
 'use strict';
 // ═════════════════════════════════════════════════════════════════════════════
-// Métrologie mono-image (technique perspectiviste automatisée) :
-//   1. ≥2 arêtes horizontales + ≥2 verticales → points de fuite (moindres carrés,
-//      jamais cliqués — ils peuvent être très loin hors image).
-//   2. PP au centre + pixels carrés → focale f² = −(p̂h·p̂v) → homographie MÉTRIQUE
-//      image→plan de façade (échelle isotrope : UNE cote suffit).
-//      Repli AFFINE si f dégénérée (photo frontale…) : une cote H + une cote V.
-//   3. Chaque trait relevé est converti en coordonnées métriques du plan →
-//      dimension instantanée + arête du graphe 2D → export DXF.
+// Métrologie mono-image (technique perspectiviste classique, automatisée) :
+//   1. Arêtes par famille → points de fuite (moindres carrés, jamais cliqués).
+//   2. Calibration, par ordre de priorité :
+//      a. CAPTURE STREET VIEW (meta fov/pitch/heading) : focale EXACTE
+//         f = (W/2)/tan(fov/2), verticale et horizon exacts du panorama →
+//         UNE arête horizontale tracée suffit (azimut de la façade).
+//      b. 3 PF finis (H, V, profondeur) : principe classique — le point
+//         principal est l'ORTHOCENTRE du triangle des PF (robuste aux captures
+//         d'écran recadrées), f moyennée sur les paires orthogonales.
+//      c. 2 PF : PP au centre + pixels carrés → f² = −(p̂i·p̂j) sur la meilleure
+//         paire disponible (H·V, H·prof ou V·prof — caméra horizontale : le PF
+//         vertical part à l'infini, la paire H·prof reste exploitable).
+//      d. Repli AFFINE si f dégénérée (photo frontale) : une cote H + une V.
+//   3. Mesures : les rayons des extrémités coupent la FACE 3D porteuse quand le
+//      volume existe (valable hors du plan de façade : retraits, retours,
+//      profondeur) ; sinon homographie métrique du plan de façade. Une cote de
+//      profondeur sans volume 3D est refusée (— au lieu d'un chiffre faux).
 // ═════════════════════════════════════════════════════════════════════════════
 
 const $ = id => document.getElementById(id);
@@ -234,20 +243,26 @@ function computeVP(segs, W, H){
   return { v, res };
 }
 
-// ── Calibration métrique : PP centre + pixels carrés → f, puis H image→plan ──
-function calibrateMetric(vh, vv, W, H){
-  const diag=Math.hypot(W,H);
-  const finite=v=>Math.abs(v[2])*diag > 1e-4*Math.hypot(v[0],v[1]);
-  if(!finite(vh)||!finite(vv)) return null;
-  const cx=W/2, cy=H/2;
-  const p1=[vh[0]/vh[2]-cx, vh[1]/vh[2]-cy];
-  const p2=[vv[0]/vv[2]-cx, vv[1]/vv[2]-cy];
-  const f2=-(p1[0]*p2[0]+p1[1]*p2[1]);
-  if(!(f2>0)) return null;
-  const f=Math.sqrt(f2);
-  if(f<0.2*Math.max(W,H) || f>20*Math.max(W,H)) return null;   // focale implausible
-  let r1=normv([p1[0]/f, p1[1]/f, 1]);
-  let r2=normv([p2[0]/f, p2[1]/f, 1]);
+// ── Calibration métrique : principe classique des 3 points de fuite ──────────
+// Les PF de trois directions orthogonales forment un triangle dont l'ORTHOCENTRE
+// est le point principal, et chaque paire orthogonale impose f² = −(p̂i·p̂j).
+// On exploite TOUS les PF disponibles (H, V et profondeur) : PP recalé si les 3
+// sont finis (capture d'écran recadrée hors centre…), focale moyennée sur les
+// paires valides — l'écart entre paires est remonté comme diagnostic.
+function orthocenter(A,B,C){
+  // intersection des hauteurs : par A ⊥ BC et par B ⊥ AC
+  const dBC=[C[0]-B[0], C[1]-B[1]], dAC=[C[0]-A[0], C[1]-A[1]];
+  const lA=[dBC[0], dBC[1], -(dBC[0]*A[0]+dBC[1]*A[1])];
+  const lB=[dAC[0], dAC[1], -(dAC[0]*B[0]+dAC[1]*B[1])];
+  const o=cross(lA,lB);
+  return Math.abs(o[2])>1e-9 ? [o[0]/o[2], o[1]/o[2]] : null;
+}
+// Repère métrique image→plan de façade pour un PP (cx,cy) et une focale donnés.
+function buildMetricFrame(vh, vv, f, cx, cy, note){
+  const dirOf=v=> Math.abs(v[2])>1e-12
+    ? normv([(v[0]/v[2]-cx)/f, (v[1]/v[2]-cy)/f, 1])
+    : normv([v[0], v[1], 0]);                                   // PF à l'infini : direction pure
+  let r1=dirOf(vh), r2=dirOf(vv);
   const d=dot3(r1,r2);                                          // Gram-Schmidt (l'ortho
   r2=normv([r2[0]-d*r1[0], r2[1]-d*r1[1], r2[2]-d*r1[2]]);      // monde n'est qu'approchée)
   const K=[[f,0,0],[0,f,0],[0,0,1]];
@@ -255,8 +270,73 @@ function calibrateMetric(vh, vv, W, H){
   const Hip=inv3(Hpi);
   if(!Hip) return null;
   return {
-    type:'metric', f,
+    type:'metric', f, note,
     toPlane:(x,y)=>{ const q=apply3(Hip,[x-cx,y-cy,1]); return [q[0]/q[2], q[1]/q[2]]; },
+  };
+}
+function calibrateMetric(vh, vv, vz, W, H){
+  const diag=Math.hypot(W,H);
+  const finite=v=>!!v && Math.abs(v[2])*diag > 1e-4*Math.hypot(v[0],v[1]);
+  const px=v=>[v[0]/v[2], v[1]/v[2]];
+  // Point principal : centre par défaut ; orthocentre du triangle des 3 PF
+  // s'ils sont tous finis et que le résultat est plausible (près de l'image)
+  let cx=W/2, cy=H/2, pp='centre';
+  if(finite(vh)&&finite(vv)&&finite(vz)){
+    const oc=orthocenter(px(vh),px(vv),px(vz));
+    if(oc && Math.hypot(oc[0]-W/2, oc[1]-H/2)<0.35*diag){ cx=oc[0]; cy=oc[1]; pp='orthocentre'; }
+  }
+  // focale : toutes les paires de PF finis (orthogonalité monde)
+  const fs=[];
+  for(const [a,b] of [[vh,vv],[vh,vz],[vv,vz]]){
+    if(!finite(a)||!finite(b)) continue;
+    const p1=[a[0]/a[2]-cx, a[1]/a[2]-cy], p2=[b[0]/b[2]-cx, b[1]/b[2]-cy];
+    const f2=-(p1[0]*p2[0]+p1[1]*p2[1]);
+    if(!(f2>0)) continue;
+    const f0=Math.sqrt(f2);
+    if(f0>=0.2*Math.max(W,H) && f0<=20*Math.max(W,H)) fs.push(f0);   // focale plausible
+  }
+  if(!fs.length) return null;
+  const f=fs.reduce((a,b)=>a+b,0)/fs.length;
+  const spread=fs.length>1 ? (Math.max(...fs)-Math.min(...fs))/f : 0;
+  return buildMetricFrame(vh, vv, f, cx, cy, {pp, spread, nPairs:fs.length});
+}
+
+// ── Calibration Street View : focale, verticale et horizon EXACTS du panorama ─
+// fov connu → f exact ; pitch connu → direction verticale et ligne d'horizon.
+// Une SEULE arête horizontale tracée suffit (azimut de la façade) : son PF est
+// l'intersection de sa droite avec l'horizon. Le PF vertical et le PF de
+// profondeur sont synthétisés exactement — plus rien à estimer.
+function calibrateSV(p, W, H){
+  const m=p.meta; if(!m?.fov) return null;
+  const f=(W/2)/Math.tan(m.fov*Math.PI/360);
+  const cx=W/2, cy=H/2;
+  const pr=(m.pitch||0)*Math.PI/180, cp=Math.cos(pr), sp=Math.sin(pr);
+  const up=[0,-cp,sp];                                       // verticale monde (repère caméra, y image vers le bas)
+  const vpOf=d=>[f*d[0]+cx*d[2], f*d[1]+cy*d[2], d[2]];      // PF (homogène) d'une direction caméra
+  let vhS=null;
+  if(p.segsH.length>=2){
+    vhS=computeVP(p.segsH, W, H);
+  } else if(p.segsH.length===1){
+    // horizon : lieu des PF horizontaux → y = cy + f·tan(pitch)
+    const lHor=[0, cp, -(cp*cy+f*sp)];
+    const s=p.segsH[0];
+    const v=cross(cross([s.x1,s.y1,1],[s.x2,s.y2,1]), lHor);
+    vhS={v, res:0};
+  }
+  if(!vhS) return null;
+  const dirOf=v=> Math.abs(v[2])>1e-12 ? normv([(v[0]/v[2]-cx)/f, (v[1]/v[2]-cy)/f, 1]) : normv([v[0],v[1],0]);
+  let r1=dirOf(vhS.v);
+  const du=dot3(r1,up);                                      // façade projetée dans le plan horizontal exact
+  r1=normv([r1[0]-du*up[0], r1[1]-du*up[1], r1[2]-du*up[2]]);
+  const r3=cross(up,r1);                                     // direction de profondeur exacte
+  const K=[[f,0,0],[0,f,0],[0,0,1]];
+  const Hpi=mul3(K, [[r1[0],up[0],0],[r1[1],up[1],0],[r1[2],up[2],1]]);
+  const Hip=inv3(Hpi);
+  if(!Hip) return null;
+  return {
+    frame:{ type:'metric', f, sv:true,
+      toPlane:(x,y)=>{ const q=apply3(Hip,[x-cx,y-cy,1]); return [q[0]/q[2], q[1]/q[2]]; } },
+    vpH:vhS, vpV:{v:vpOf(up), res:0}, vpZ:{v:vpOf(r3), res:0},
   };
 }
 
@@ -271,8 +351,9 @@ function affineFrame(vh, vv, W, H){
   };
 }
 
-// Direction d'un segment : comparaison aux directions vers les 2 PF à son milieu.
-function classifyDir(seg, vh, vv){
+// Direction d'un segment : comparaison aux directions vers les PF à son milieu
+// (H, V et profondeur quand son PF est connu).
+function classifyDir(seg, vh, vv, vz){
   const mx=(seg.x1+seg.x2)/2, my=(seg.y1+seg.y2)/2;
   const d=[seg.x2-seg.x1, seg.y2-seg.y1];
   const toward=v=>{
@@ -281,11 +362,14 @@ function classifyDir(seg, vh, vv){
   };
   const dn=Math.hypot(d[0],d[1])||1e-12;
   const u=[d[0]/dn, d[1]/dn];
-  const ah=Math.abs(u[0]*toward(vh)[0]+u[1]*toward(vh)[1]);
-  const av=Math.abs(u[0]*toward(vv)[0]+u[1]*toward(vv)[1]);
-  if(ah>av && ah>0.966) return 'H';       // < ~15° de la direction de fuite
-  if(av>ah && av>0.966) return 'V';
-  return 'O';
+  let best='O', bestA=0.966;              // < ~15° de la direction de fuite
+  for(const [ax,v] of [['H',vh],['V',vv],['Z',vz]]){
+    if(!v) continue;
+    const t=toward(v);
+    const a=Math.abs(u[0]*t[0]+u[1]*t[1]);
+    if(a>bestA){ bestA=a; best=ax; }
+  }
+  return best;
 }
 
 // ── Pipeline : recalculé à chaque modification ───────────────────────────────
@@ -294,10 +378,15 @@ function recompute(){
   const p=P();
   if(!p) { renderAll(); return; }
   const W=p.img.naturalWidth, H=p.img.naturalHeight;
-  const vpH=computeVP(p.segsH, W, H), vpV=computeVP(p.segsV, W, H);
+  let vpH=computeVP(p.segsH, W, H), vpV=computeVP(p.segsV, W, H), vpZ=computeVP(p.segsZ, W, H);
   let frame=null;
-  if(vpH && vpV){
-    frame=calibrateMetric(vpH.v, vpV.v, W, H) || affineFrame(vpH.v, vpV.v, W, H);
+  // capture Street View : calibration exacte dès 1 arête horizontale
+  if(p.meta?.fov){
+    const svc=calibrateSV(p, W, H);
+    if(svc){ frame=svc.frame; vpH=svc.vpH; vpV=svc.vpV; vpZ=svc.vpZ; }
+  }
+  if(!frame && vpH && vpV){
+    frame=calibrateMetric(vpH.v, vpV.v, vpZ?.v, W, H) || affineFrame(vpH.v, vpV.v, W, H);
   }
   // Orientation canonique du plan : x croît vers la droite de l'image, y vers le
   // haut (le signe des axes dépend sinon de la position des points de fuite → miroir).
@@ -316,7 +405,8 @@ function recompute(){
       const a=frame.toPlane(r.seg.x1,r.seg.y1), b=frame.toPlane(r.seg.x2,r.seg.y2);
       const dpl=Math.hypot(b[0]-a[0], b[1]-a[1]);
       if(dpl<1e-9) continue;
-      r.dir=classifyDir(r.seg, vpH.v, vpV.v);
+      r.dir=classifyDir(r.seg, vpH?.v, vpV?.v, vpZ?.v);
+      if(r.dir==='Z') continue;           // cote de profondeur : n'étalonne que le volume 3D
       if(frame.type==='metric'){ sc2.push({r, dpl}); }
       else {
         if(r.dir==='H') su = r.len/Math.abs(b[0]-a[0]);
@@ -330,18 +420,29 @@ function recompute(){
       for(const q of sc2) q.r.chk = q.dpl*scale;
     }
   }
-  // longueur métrique d'un segment (null si l'échelle manque)
-  const segLen = seg => {
+  // mesure d'un segment : la face 3D porteuse (rayons) est prioritaire — c'est
+  // la seule mesure valable HORS du plan de façade (porte en retrait, retour,
+  // profondeur). À défaut : homographie du plan de façade. Une cote de
+  // PROFONDEUR sans volume 3D est refusée (l'homographie donnerait un chiffre
+  // faux en la plaquant sur le plan de façade).
+  const dirOfSeg = seg => (vpH&&vpV) ? classifyDir(seg, vpH.v, vpV.v, vpZ?.v) : 'O';
+  const segInfo = seg => {
+    const dir=dirOfSeg(seg);
+    const m3=measure3D(seg);
+    if(m3 && m3.L!=null) return {...m3, dir};
+    if(dir==='Z') return {L:null, mode:'z-no3d', dir};
     if(!frame) return null;
     const a=frame.toPlane(seg.x1,seg.y1), b=frame.toPlane(seg.x2,seg.y2);
     const du=b[0]-a[0], dv=b[1]-a[1];
-    if(frame.type==='metric') return scale!=null ? Math.hypot(du,dv)*scale : null;
-    if(su!=null && sv!=null) return Math.hypot(du*su, dv*sv);
-    const dir=classifyDir(seg, vpH.v, vpV.v);
-    if(dir==='H' && su!=null) return Math.abs(du)*su;
-    if(dir==='V' && sv!=null) return Math.abs(dv)*sv;
-    return null;
+    let L=null;
+    if(frame.type==='metric') L = scale!=null ? Math.hypot(du,dv)*scale : null;
+    else if(su!=null && sv!=null) L=Math.hypot(du*su, dv*sv);
+    else if(dir==='H' && su!=null) L=Math.abs(du)*su;
+    else if(dir==='V' && sv!=null) L=Math.abs(dv)*sv;
+    return {L, mode:'plan', dir};
   };
+  // longueur métrique d'un segment (null si l'échelle manque)
+  const segLen = seg => segInfo(seg)?.L ?? null;
   // coordonnées métriques d'un point pour le graphe/DXF
   const segPlane = seg => {
     if(!frame) return null;
@@ -351,7 +452,7 @@ function recompute(){
     if(!kx || !ky) return null;
     return { a:[a[0]*kx, a[1]*ky], b:[b[0]*kx, b[1]*ky] };
   };
-  pipeline={ vpH, vpV, frame, scale, su, sv, segLen, segPlane,
+  pipeline={ vpH, vpV, vpZ, frame, scale, su, sv, segLen, segInfo, segPlane,
              ready: !!frame && (frame.type==='metric' ? scale!=null : (su!=null&&sv!=null)) };
   recompute3D();
   renderAll();
@@ -403,8 +504,13 @@ function recompute3D(){
       }
     });
   }
-  if(fam.H.length<2 || fam.V.length<2 || fam.Z.length<1){
-    if(fam.Z.length) vol={err:'need-edges', nH:fam.H.length, nV:fam.V.length, nZ:fam.Z.length};
+  // Groupe 100 % Street View : la verticale monde est EXACTE (repère panorama,
+  // y = zénith) → plus besoin de 2 arêtes verticales, et 1 seule horizontale
+  // suffit pour l'azimut de la façade.
+  const allSV=grp.every(q=>q.meta?.fov);
+  if(allSV ? (fam.H.length<1 || fam.Z.length<1)
+           : (fam.H.length<2 || fam.V.length<2 || fam.Z.length<1)){
+    if(fam.Z.length) vol={err:'need-edges', nH:fam.H.length, nV:fam.V.length, nZ:fam.Z.length, sv:allSV};
     return;
   }
   const dirFrom=ns=>{
@@ -412,7 +518,9 @@ function recompute3D(){
     for(const n of ns) for(let i=0;i<3;i++)for(let j=0;j<3;j++) M[i][j]+=n[i]*n[j];
     return normv(smallestEig3(M));
   };
-  let dX=dirFrom(fam.H), dY=dirFrom(fam.V);
+  let dY = allSV ? [0,1,0] : dirFrom(fam.V);
+  // 1 seule arête H (SV) : direction = normale de son plan d'interprétation × verticale
+  let dX = fam.H.length>=2 ? dirFrom(fam.H) : normv(cross(fam.H[0], dY));
   // trièdre orthonormé DANS le vrai repère caméra → pas d'ambiguïté miroir :
   // e2 vers le haut, e1 vers la droite, e3 = e1×e2 (règle de la main droite)
   if(dY[1]<0) dY=dY.map(c=>-c);
@@ -538,31 +646,52 @@ function volToPixel(photo,Pv){
   if(Pc[2]<=0) return null;
   return [w/2+vol.fEst*Pc[0]/Pc[2], h/2-vol.fEst*Pc[1]/Pc[2]];
 }
+// Rayons des 2 extrémités d'un tracé → face porteuse commune (la plus petite
+// qui contient les deux impacts). Mutualisé entre percements, mesures hors plan
+// de façade et étalonnage du volume par les cotes de référence.
+function rayFaceHit(pts, photo){
+  if(!vol || vol.err || !vol.faces?.length) return null;
+  const C0=volCamCenter();
+  const d1=volRayFrom(photo,pts.x1,pts.y1), d2=volRayFrom(photo,pts.x2,pts.y2);
+  let bestF=null, bestPts=null, bestArea=1e18;
+  for(const F of vol.faces){
+    if(F.type==='off') continue;
+    const N=AXC[F.normal];
+    const cN=F.pts.reduce((s,q)=>s+q[N],0)/4;
+    const hit=d=>{ if(Math.abs(d[N])<1e-9) return null; const t=(cN-C0[N])/d[N]; return t>0 ? [C0[0]+t*d[0], C0[1]+t*d[1], C0[2]+t*d[2]] : null; };
+    const P1=hit(d1), P2=hit(d2);
+    if(!P1||!P2) continue;
+    const A1=AXC[F.axes[0]], A2=AXC[F.axes[1]];
+    const us=F.pts.map(q=>q[A1]), vs2=F.pts.map(q=>q[A2]);
+    const u0=Math.min(...us), u1=Math.max(...us), v0=Math.min(...vs2), v1=Math.max(...vs2);
+    const tol=0.03*Math.max(u1-u0, v1-v0);
+    const inside=q=> q[A1]>=u0-tol && q[A1]<=u1+tol && q[A2]>=v0-tol && q[A2]<=v1+tol;
+    if(!inside(P1)||!inside(P2)) continue;
+    const area=(u1-u0)*(v1-v0);
+    if(area<bestArea){ bestArea=area; bestF=F; bestPts=[P1,P2]; }
+  }
+  return bestF ? {face:bestF, P1:bestPts[0], P2:bestPts[1]} : null;
+}
+// Mesure via le volume 3D : contrairement à l'homographie de façade, valable
+// sur N'IMPORTE quel plan reconstruit (mur en retrait, retour, pignon) — y
+// compris les cotes de profondeur.
+function measure3D(seg){
+  const p=P();
+  if(!p) return null;
+  const hit=rayFaceHit(seg, p);
+  if(!hit) return null;
+  const Lp=Math.hypot(hit.P2[0]-hit.P1[0], hit.P2[1]-hit.P1[1], hit.P2[2]-hit.P1[2]);
+  const k=getVolScale().k;
+  return { L: k!=null ? Lp*k : null, Lp, face:hit.face, mode:'3d' };
+}
 function projectPerces(){
   vol.perces=[];
   const p0=groupPhotos()[0];
   if(!p0?.percePts?.length || !vol.faces?.length) return;
-  const C0=volCamCenter();
   for(const pp of p0.percePts){
-    const d1=volRayFrom(pp.photo,pp.x1,pp.y1), d2=volRayFrom(pp.photo,pp.x2,pp.y2);
-    let bestF=null, bestPts=null, bestArea=1e18;
-    for(const F of vol.faces){
-      if(F.type==='off') continue;
-      const N=AXC[F.normal];
-      const cN=F.pts.reduce((s,q)=>s+q[N],0)/4;
-      const hit=d=>{ if(Math.abs(d[N])<1e-9) return null; const t=(cN-C0[N])/d[N]; return t>0 ? [C0[0]+t*d[0], C0[1]+t*d[1], C0[2]+t*d[2]] : null; };
-      const P1=hit(d1), P2=hit(d2);
-      if(!P1||!P2) continue;
-      const A1=AXC[F.axes[0]], A2=AXC[F.axes[1]];
-      const us=F.pts.map(q=>q[A1]), vs2=F.pts.map(q=>q[A2]);
-      const u0=Math.min(...us), u1=Math.max(...us), v0=Math.min(...vs2), v1=Math.max(...vs2);
-      const tol=0.03*Math.max(u1-u0, v1-v0);
-      const inside=q=> q[A1]>=u0-tol && q[A1]<=u1+tol && q[A2]>=v0-tol && q[A2]<=v1+tol;
-      if(!inside(P1)||!inside(P2)) continue;
-      const area=(u1-u0)*(v1-v0);
-      if(area<bestArea){ bestArea=area; bestF=F; bestPts=[P1,P2]; }
-    }
-    if(!bestF){ vol.perces.push({pp, face:null}); continue; }
+    const h=rayFaceHit(pp, pp.photo);
+    if(!h){ vol.perces.push({pp, face:null}); continue; }
+    const bestF=h.face, bestPts=[h.P1, h.P2];
     const A1=AXC[bestF.axes[0]], A2=AXC[bestF.axes[1]], N=AXC[bestF.normal];
     const cN=bestF.pts.reduce((s,q)=>s+q[N],0)/4;
     const umin=Math.min(bestPts[0][A1],bestPts[1][A1]), umax=Math.max(bestPts[0][A1],bestPts[1][A1]);
@@ -582,12 +711,29 @@ function projectPerces(){
 }
 // Échelle du volume : l'utilisateur fixe la longueur réelle d'UNE arête (tableau
 // 4b) — tout est proportionnel, donc réajustable à tout moment sans retracer.
+// Repli automatique : les cotes de référence 2D (étape 3) dont les extrémités
+// touchent une face reconstruite étalonnent aussi le volume — une seule cote
+// connue met à l'échelle le plan de façade ET le volume.
 function getVolScale(){
+  if(!vol || vol.err) return {k:null};
   const p0=groupPhotos()[0];
   const fix=p0?.scaleFix;
-  if(!vol || vol.err || !fix) return {k:null};
-  const E=vol.edges.find(e=>e.seg===fix.seg && e.len>0);
-  return E ? {k:fix.val/E.len, seg:fix.seg} : {k:null};
+  if(fix){
+    const E=vol.edges.find(e=>e.seg===fix.seg && e.len>0);
+    if(E) return {k:fix.val/E.len, seg:fix.seg};
+  }
+  const p=P(), ks=[];
+  if(p && vol.faces?.length){
+    for(const r of p.refs){
+      if(!(r.len>0)) continue;
+      const hit=rayFaceHit(r.seg, p);
+      if(!hit) continue;
+      const Lp=Math.hypot(hit.P2[0]-hit.P1[0], hit.P2[1]-hit.P1[1], hit.P2[2]-hit.P1[2]);
+      if(Lp>1e-9) ks.push(r.len/Lp);
+    }
+  }
+  if(ks.length) return {k:ks.reduce((a,b)=>a+b,0)/ks.length, from:'ref'};
+  return {k:null};
 }
 function draw3D(){
   resetT();
@@ -595,7 +741,7 @@ function draw3D(){
   ctx.font='13px Arial'; ctx.textAlign='center'; ctx.fillStyle='#475569';
   if(!vol){ ctx.fillText('Tracez les arêtes du volume : ≥2 horizontales, ≥2 verticales, ≥1 profondeur — coins aimantés.', VW/2, VH/2); return; }
   if(vol.err==='no-f'){ ctx.fillText('Focale inconnue — complétez les arêtes H et V (calibration), ou utilisez des captures Street View.', VW/2, VH/2); return; }
-  if(vol.err==='need-edges'){ ctx.fillText(`Arêtes insuffisantes (H:${vol.nH} V:${vol.nV} prof:${vol.nZ}) — il faut ≥2 H, ≥2 V, ≥1 profondeur.`, VW/2, VH/2); return; }
+  if(vol.err==='need-edges'){ ctx.fillText(`Arêtes insuffisantes (H:${vol.nH} V:${vol.nV} prof:${vol.nZ}) — il faut ${vol.sv?'≥1 H, ≥1 profondeur (Street View : verticale exacte)':'≥2 H, ≥2 V, ≥1 profondeur'}.`, VW/2, VH/2); return; }
   const placed=vol.edges.filter(e=>e.a&&e.b);
   if(!placed.length){ ctx.fillText('Aucune arête connectée à l\'ancre — aimantez les coins entre eux.', VW/2, VH/2); return; }
   const sc=getVolScale();
@@ -633,7 +779,7 @@ function draw3D(){
   });
   ctx.fillStyle='#94a3b8'; ctx.font='12px Arial'; ctx.textAlign='left';
   ctx.fillText(`${vol.group>1 ? vol.group+' crops du même panorama · ' : ''}${placed.length} arêtes · ${(vol.faces||[]).length} face(s) · ${(vol.perces||[]).filter(q=>q.rect).length} percement(s) · `
-    + (sc.k!=null ? 'échelle fixée (ajustable en 4b)' : 'PROPORTIONNEL — saisissez une longueur en 4b')
+    + (sc.k!=null ? (sc.from==='ref' ? 'échelle héritée de la cote de référence (étape 3)' : 'échelle fixée (ajustable en 4b)') : 'PROPORTIONNEL — saisissez une longueur en 4b ou une cote de référence (étape 3)')
     + (vol.unplaced ? ` · ${vol.unplaced} sommet(s) non relié(s) à l'ancre` : ''), 14, VH-14);
 }
 function exportDXF3D(){
@@ -1291,7 +1437,7 @@ function renderPanels(){
   const rr=$('ref-rows'); rr.innerHTML='';
   (p?.refs||[]).forEach((r,i)=>{
     const d=document.createElement('div'); d.className='refrow';
-    const dirTxt=r.dir==='H'?'horizontale':r.dir==='V'?'verticale':'';
+    const dirTxt=r.dir==='H'?'horizontale':r.dir==='V'?'verticale':r.dir==='Z'?'profondeur':'';
     // écart saisi ↔ recalculé (>1 %) : révèle une ref douteuse ou des refs incompatibles
     const dev = (r.chk!=null && r.len>0 && Math.abs(r.chk-r.len)/r.len>0.01)
       ? ` <span class="badge" style="background:#7c2d12" title="valeur recalculée avec l'échelle moyenne — écart avec votre saisie">≈ ${fmt(r.chk)}</span>` : '';
@@ -1308,30 +1454,49 @@ function renderPanels(){
   // mesures
   const tb=$('cotes-table'); tb.innerHTML='';
   (p?.mesures||[]).forEach((m,i)=>{
-    const L=pipeline?.segLen(m.seg);
-    const dir=pipeline?.vpH&&pipeline?.vpV ? classifyDir(m.seg,pipeline.vpH.v,pipeline.vpV.v) : '';
+    const info=pipeline?.segInfo ? pipeline.segInfo(m.seg) : null;
+    const L=info?.L, dir=info?.dir||'';
+    const dirTxt=dir==='H'?'horiz.':dir==='V'?'vert.':dir==='Z'?'prof.':dir==='O'?'oblique':'';
+    const fi=(info?.mode==='3d'&&vol&&!vol.err) ? vol.faces.indexOf(info.face)+1 : 0;
+    const via=info?.mode==='3d'
+      ? ` <span class="badge" style="background:#1e3a5f" title="mesurée sur la face F${fi} du volume 3D — valable hors du plan de façade">3D·F${fi}</span>`
+      : info?.mode==='z-no3d'
+      ? ` <span class="badge" style="background:#7c2d12" title="une cote de profondeur ne peut PAS se mesurer dans le plan de façade — tracez le volume 3D (4b) : arêtes aimantées + une longueur connue">3D requis</span>` : '';
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>C${i+1}</td><td class="dir">${dir==='H'?'horiz.':dir==='V'?'vert.':dir==='O'?'oblique':''}</td>
+    tr.innerHTML=`<td>C${i+1}</td><td class="dir">${dirTxt}${via}</td>
                   <td class="val">${L!=null?fmt(L):'—'}</td><td class="del">✕</td>`;
     tr.querySelector('.del').onclick=()=>{ p.mesures.splice(i,1); recompute(); };
     tb.appendChild(tr);
   });
 
   // statuts
-  const nH=p?.segsH.length||0, nV=p?.segsV.length||0;
+  const nH=p?.segsH.length||0, nV=p?.segsV.length||0, nZ=p?.segsZ.length||0;
+  const svEx=!!pipeline?.frame?.sv;
   const vps=$('vp-status');
   if(!p) vps.textContent='';
-  else {
+  else if(p.meta?.fov){
+    vps.innerHTML = `<span style="color:#86efac">Panorama Street View : focale, verticale &amp; horizon exacts</span><br>`
+      + (nH>=1 ? `PF horizontal : <span style="color:#86efac">✓ ${nH} arête(s)</span>`
+               : `PF horizontal : <span style="color:#fca5a5">tracez 1 arête horizontale (azimut façade)</span>`);
+  } else {
     const st=(n,vp,nom)=> n<2 ? `PF ${nom} : <span style="color:#fca5a5">${n}/2 arêtes</span>`
       : `PF ${nom} : <span style="color:#86efac">✓ ${n} arêtes${vp?.res!=null?` (±${vp.res.toFixed(1)} px)`:''}</span>`;
-    vps.innerHTML = st(nH,pipeline?.vpH,'horizontal')+'<br>'+st(nV,pipeline?.vpV,'vertical');
+    vps.innerHTML = st(nH,pipeline?.vpH,'horizontal')+'<br>'+st(nV,pipeline?.vpV,'vertical')
+      + (nZ>=2 ? '<br>'+st(nZ,pipeline?.vpZ,'profondeur') : '');
   }
   $('ok-vp').style.display = (pipeline?.vpH&&pipeline?.vpV)?'inline':'none';
 
   const cs=$('cal-status');
-  if(!pipeline?.frame) cs.innerHTML = p&&nH>=2&&nV>=2 ? '<span style="color:#fca5a5">Calibration impossible — vérifiez les arêtes.</span>' : 'En attente des deux familles d\'arêtes.';
+  if(!pipeline?.frame) cs.innerHTML = p?.meta?.fov
+    ? '<span style="color:#93c5fd">Capture Street View</span> — focale et horizon déjà connus : <b>1 arête horizontale suffit</b> pour calibrer.'
+    : (p&&nH>=2&&nV>=2 ? '<span style="color:#fca5a5">Calibration impossible — vérifiez les arêtes.</span>' : 'En attente des deux familles d\'arêtes.');
   else if(pipeline.frame.type==='metric'){
-    cs.innerHTML = `<span style="color:#86efac">Calibration métrique ✓</span> (f ≈ ${Math.round(pipeline.frame.f)} px) — <b>une seule cote suffit</b>, dans n'importe quelle direction.`
+    const n=pipeline.frame.note;
+    cs.innerHTML = (svEx
+        ? `<span style="color:#86efac">Calibration Street View EXACTE ✓</span> (FOV ${Math.round(p.meta.fov)}° → f = ${Math.round(pipeline.frame.f)} px, horizon du panorama)`
+        : `<span style="color:#86efac">Calibration métrique ✓</span> (f ≈ ${Math.round(pipeline.frame.f)} px${n?.pp==='orthocentre'?', PP recalé — orthocentre des 3 PF':''})`)
+      + ` — <b>une seule cote suffit</b>, dans n'importe quelle direction.`
+      + (n?.spread>0.15 ? `<br><span style="color:#fde047">⚠ Les paires de PF divergent (écart de focale ${Math.round(n.spread*100)} %) — retracez des arêtes plus longues/mieux réparties, la profondeur en dépend.</span>` : '')
       + (pipeline.scale==null ? '<br><span style="color:#fde047">Tracez la cote de référence et saisissez sa valeur.</span>':'');
   } else {
     cs.innerHTML = `<span style="color:#fde047">Mode affine</span> (perspective faible/frontale) — il faut <b>une cote horizontale ET une verticale</b>.`
@@ -1339,7 +1504,7 @@ function renderPanels(){
   }
   $('ok-scale').style.display = pipeline?.ready?'inline':'none';
   $('mes-hint').textContent = pipeline?.ready
-    ? 'Chaque trait relevé nourrit le graphe (onglet Graphe). Astuce : suivez les arêtes réelles (tableaux, allèges, acrotères).'
+    ? 'Chaque trait relevé nourrit le graphe (onglet Graphe). Les cotes hors du plan de façade (retrait, retour, profondeur) sont mesurées sur les faces du volume 3D (4b/4c) — badge 3D dans le tableau.'
     : '';
 
   // ── 4b · Volume 3D : arêtes reconstruites + fixation d'échelle ──
@@ -1368,10 +1533,11 @@ function renderPanels(){
     const placed=vol.edges.filter(e=>e.a).length;
     vs.innerHTML = `<span style="color:#86efac">${placed} arête(s) 3D</span>`
       + (vol.group>1 ? ` · ${vol.group} crops fusionnés (même panorama)` : '')
-      + (sc.k==null ? ' · <span style="color:#fde047">proportionnel — saisissez une longueur ci-dessus</span>' : ' · échelle fixée')
+      + (sc.k==null ? ' · <span style="color:#fde047">proportionnel — saisissez une longueur ci-dessus ou une cote de référence (étape 3)</span>'
+                    : (sc.from==='ref' ? ' · échelle héritée de la cote de référence' : ' · échelle fixée'))
       + (vol.unplaced ? ` · <span style="color:#fca5a5">${vol.unplaced} sommet(s) non relié(s)</span>` : '');
   } else if(vol?.err==='need-edges'){
-    vs.innerHTML=`<span style="color:#fca5a5">Arêtes insuffisantes (H:${vol.nH} V:${vol.nV} prof:${vol.nZ})</span> — ≥2 H, ≥2 V, ≥1 profondeur, coins aimantés.`;
+    vs.innerHTML=`<span style="color:#fca5a5">Arêtes insuffisantes (H:${vol.nH} V:${vol.nV} prof:${vol.nZ})</span> — ${vol.sv?'≥1 H et ≥1 profondeur suffisent (Street View : verticale exacte)':'≥2 H, ≥2 V, ≥1 profondeur'}, coins aimantés.`;
   } else if(vol?.err==='no-f'){
     vs.innerHTML='<span style="color:#fca5a5">Focale inconnue</span> — complétez les arêtes H/V, ou utilisez des captures Street View (focale exacte).';
   } else {
