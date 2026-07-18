@@ -1123,10 +1123,13 @@ async function extractGPS(fromIdx = 0) {
     if (i >= fromIdx && !gpsData[i]) {
       try {
         const exif = await window.Exifr?.parse(f, ['GPSLatitude','GPSLongitude','GPSAltitude','GPSImgDirection','FocalLength','Make','Model']);
-        if (exif?.GPSLatitude && exif?.GPSLongitude) {
+        // exifr livre GPSLatitude/GPSLongitude en tableaux DMS [d,m,s] ET
+        // latitude/longitude en degrés décimaux : stocker les scalaires,
+        // sinon meta.lat devient un tableau (assemblage KO, crop → EXIF NaN)
+        if (exif?.latitude != null && exif?.longitude != null) {
           gpsData[i] = {
-            lat: exif.GPSLatitude,
-            lon: exif.GPSLongitude,
+            lat: exif.latitude,
+            lon: exif.longitude,
             alt: exif.GPSAltitude,
             direction: exif.GPSImgDirection,
             focal: exif.FocalLength,
@@ -2872,12 +2875,17 @@ async function applyCrop() {
     // Réinjecter le GPS si disponible pour l'assemblage ODM
     if (gpsData[lbIndex]) {
       const g = gpsData[lbIndex];
-      // Pour une image cropée on n'a plus forcément un fov exact, mais on réinjecte lat/lng
+      // Pour une image cropée on n'a plus forcément un fov exact, mais on réinjecte lat/lon
+      // (gpsData stocke lat/lon — g.latitude/longitude n'existent pas : GPS jamais écrit)
       try {
-        finalBlob = await writeGeoExifJpeg(blob, g.latitude, g.longitude, undefined);
+        finalBlob = await writeGeoExifJpeg(blob, g.lat, g.lon, undefined);
       } catch(e) {
         console.warn('Erreur injection EXIF crop:', e);
       }
+      // Un crop décentré déplace le centre optique et réduit le fov : les méta
+      // pano deviennent fausses — on les retire pour que l'atelier cotation ne
+      // calibre pas dessus (le GPS, lui, reste valable).
+      delete g.pano; delete g.heading; delete g.pitch; delete g.fov; delete g.size;
     }
     
     const oldFile = files[lbIndex];
