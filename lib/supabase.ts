@@ -1,19 +1,44 @@
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 // Sanitize les variables d'env : supprime les caractères Unicode invisibles
 // (zero-width space, BOM…) qui peuvent s'introduire par copier-coller depuis
 // un navigateur et provoquer "String contains non ISO-8859-1 code point" lors
 // des appels Auth (Authorization: Bearer <key> est un header HTTP).
 // Les clés JWT Supabase ne contiennent que des caractères ASCII valides.
-const supabaseURL = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').trim().replace(/[^\x00-\x7F]/g, '');
-const supabaseKeyRaw = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '').trim().replace(/[^\x00-\x7F]/g, '');
+const sanitize = (v?: string) => (v ?? "").trim().replace(/[^\x00-\x7F]/g, "");
 
-export const supabase = createClient(supabaseURL, supabaseKeyRaw);
+let _client: SupabaseClient | null = null;
+
+function getClient(): SupabaseClient {
+  if (!_client) {
+    _client = createClient(
+      sanitize(process.env.NEXT_PUBLIC_SUPABASE_URL),
+      sanitize(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
+    );
+  }
+  return _client;
+}
+
+// Initialisation paresseuse : le client n'est créé qu'au premier accès réel,
+// jamais à l'import du module — un build dont les variables d'env Supabase
+// manquent (environnement Vercel incomplet) ne peut donc plus échouer avec
+// "supabaseUrl is required" pendant le prerendering.
+function lazy<T extends object>(make: () => T): T {
+  return new Proxy({} as T, {
+    get(_target, prop) {
+      const obj = make() as Record<PropertyKey, unknown>;
+      const value = obj[prop as keyof typeof obj];
+      return typeof value === "function" ? value.bind(obj) : value;
+    },
+  });
+}
+
+export const supabase = lazy(() => getClient());
 
 // Pour les requêtes de données dans le schéma pick_in_situ, utilisez :
 //   supabase.schema("pick_in_situ").from("ma_table")...
 // ou utilisez le helper db ci-dessous.
-export const db = supabase.schema("pick_in_situ");
+export const db = lazy(() => getClient().schema("pick_in_situ"));
 
 export type ScanStatus = "capturing" | "processing" | "ready" | "failed";
 
