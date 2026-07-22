@@ -47,9 +47,9 @@
         {
           "repoPath": "modules/site.js",
           "driveFileId": "1NksuXU3DfubSFZF-GLjhxVFqgHBjvW8U",
-          "driveModifiedTime": "2026-07-22T12:14:34.112Z",
-          "baseCommit": "96a9c1f",
-          "note": "Sync 22/07 (2e passe) : durcissement de la sauvegarde autonome (balises <script> assemblées par concaténation, échappement des « < », sauts de ligne via String.fromCharCode) — appliqué proprement sur master. 1re passe : fusion 3 voies 11 conflits (features Drive + ortho bi-résolution master)."
+          "driveModifiedTime": "2026-07-22T12:42:44.372Z",
+          "baseCommit": "a495623",
+          "note": "Sync 22/07 (3e passe) : épingles de points déplaçables (drag pour ajuster les coords L93/NGF) + ciblage de la dernière </body> à la sauvegarde. Appliqué sans conflit. Passes précédentes : durcissement sauvegarde (2e), fusion 3 voies 11 conflits — features Drive + ortho bi-résolution master (1re)."
         }
       ]
     },
