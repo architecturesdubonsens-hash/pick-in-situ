@@ -47,9 +47,9 @@
         {
           "repoPath": "modules/site.js",
           "driveFileId": "1NksuXU3DfubSFZF-GLjhxVFqgHBjvW8U",
-          "driveModifiedTime": "2026-07-22T10:22:50.994Z",
-          "baseCommit": "b7a4297",
-          "note": "Sync 22/07 : fusion 3 voies — features Drive (calage IFC E/N/Z, mode Points L93/NGF, sauvegarde autonome) + chargement ortho bi-résolution mobile de master conservé. 11 conflits arbitrés."
+          "driveModifiedTime": "2026-07-22T12:14:34.112Z",
+          "baseCommit": "96a9c1f",
+          "note": "Sync 22/07 (2e passe) : durcissement de la sauvegarde autonome (balises <script> assemblées par concaténation, échappement des « < », sauts de ligne via String.fromCharCode) — appliqué proprement sur master. 1re passe : fusion 3 voies 11 conflits (features Drive + ortho bi-résolution master)."
         }
       ]
     },
