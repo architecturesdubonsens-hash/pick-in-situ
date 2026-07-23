@@ -41,15 +41,23 @@
         {
           "repoPath": "index.html",
           "driveFileId": "1e9vgE5ECNh9ts1aZYXrJ5bCMJU53dVZQ",
-          "driveModifiedTime": "2026-07-16T13:02:57.309Z",
-          "baseCommit": "e6b4bda"
+          "driveModifiedTime": "2026-07-23T05:23:05.329Z",
+          "baseCommit": "b6ce5b8",
+          "note": "Sync 23/07 : Drive identique au dépôt (hors CRLF), rien à rapatrier. Le cache-bust site.js y est déjà à ?v=20260723b."
         },
         {
           "repoPath": "modules/site.js",
           "driveFileId": "1NksuXU3DfubSFZF-GLjhxVFqgHBjvW8U",
-          "driveModifiedTime": "2026-07-22T12:42:44.372Z",
-          "baseCommit": "a495623",
-          "note": "Sync 22/07 (3e passe) : épingles de points déplaçables (drag pour ajuster les coords L93/NGF) + ciblage de la dernière </body> à la sauvegarde. Appliqué sans conflit. Passes précédentes : durcissement sauvegarde (2e), fusion 3 voies 11 conflits — features Drive + ortho bi-résolution master (1re)."
+          "driveModifiedTime": "2026-07-23T05:22:05.431Z",
+          "baseCommit": "b6ce5b8",
+          "note": "Sync 23/07 : la version Drive était identique au dépôt (hors CRLF). Puis modif faite DIRECTEMENT sur GitHub (commit b6ce5b8) : inlining de three.js dans les viewers 3D exportés (autonomes hors-ligne, fix viewer figé sur mobile) + libs vendorées dans vendor/. Drive EN RETARD sur GitHub — fichier à jour envoyé à l'utilisateur pour remplacement manuel dans app-v3/modules/. Passes précédentes : épingles déplaçables (3e), durcissement sauvegarde (2e), fusion 3 voies (1re)."
+        },
+        {
+          "repoPath": "ortho-mobile-test.html",
+          "driveFileId": "1qDqnfsJfvoFxfMNlO3UJuW2zEIhGFtW8",
+          "driveModifiedTime": "2026-07-23T05:34:17.430Z",
+          "baseCommit": "b6ce5b8",
+          "note": "Page de diagnostic orthophoto mobile (test décodage/upload WebGL par taille). Drive identique au dépôt. Créée le 23/07."
         }
       ]
     },
