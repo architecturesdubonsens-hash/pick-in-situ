@@ -54,9 +54,9 @@
         {
           "repoPath": "modules/site.js",
           "driveFileId": "1NksuXU3DfubSFZF-GLjhxVFqgHBjvW8U",
-          "driveModifiedTime": "2026-07-29T09:28:29.788Z",
-          "baseCommit": "485ba4c",
-          "note": "Sync 29/07 (6e passe) : élimination des parties cachées sur la façade IFC en coupe — algorithme du peintre sur les faces projetées (tri profondeur, estompage gris→blanc), export DXF en entités SOLID (calque IFC_MASQUE). S'ajoute à la convention de coupe bâti/IFC (5e passe, commit 2609a7b) déjà synchronisée. Appliqué sans conflit."
+          "driveModifiedTime": "2026-07-29T14:40:59.086Z",
+          "baseCommit": "1b663ba",
+          "note": "Sync 29/07 (7e passe) : découpe orthophoto par emprise IFC exacte (union de triangles projetés, remplace l'enveloppe convexe) + catégorisation terrain/végétation/bâti des éléments IFC (_ifcCategorie/_catOf) — exclut le maillage de terrain IFC de la découpe et de la façade projetée, retire les faces devant le plan de coupe, rend la végétation en silhouette translucide. Appliqué sans conflit."
         },
         {
           "repoPath": "vendor/copc-lidar.js",
