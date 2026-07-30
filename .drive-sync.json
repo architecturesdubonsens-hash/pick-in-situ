@@ -54,9 +54,9 @@
         {
           "repoPath": "modules/site.js",
           "driveFileId": "1NksuXU3DfubSFZF-GLjhxVFqgHBjvW8U",
-          "driveModifiedTime": "2026-07-30T12:56:23.497Z",
-          "baseCommit": "64ec797",
-          "note": "Sync 30/07 (11e passe) : occultation du nuage LiDAR sous les IFC (_lidarOcclude/_ifcMaskImageData, branché dans _applyClip) + empreinte IFC robuste aux sommets aberrants (_ifcFootprintTrisUV en 2 passages, rejet au-delà de max(60 m, 8×médiane)) + bbox LiDAR recalé sur l'orthophoto via _wgs84ToL93 et densité adaptative + réordonnancement du tracé de coupe. 10e passe : export BIM GLB/OBJ + LiDAR HD. Drive seul modifié, sans conflit (node --check OK, symboles _wgs84ToL93/_margePx vérifiés)."
+          "driveModifiedTime": "2026-07-30T16:29:56.867Z",
+          "baseCommit": "1f544de",
+          "note": "Sync 30/07 (12e passe, dernière de la journée) : export FBX ASCII 7.4 autonome (_fbxBuild, texture orthophoto embarquée en base64 Video/Content, repère Z-up, _b64 par tranches) importable comme objet unique dans ArchiCAD ; exportBIM gère fbx/obj/glb. 11e passe : occultation LiDAR sous IFC + empreinte IFC robuste. Drive seul modifié, sans conflit (node --check OK)."
         },
         {
           "repoPath": "vendor/copc-lidar.js",
