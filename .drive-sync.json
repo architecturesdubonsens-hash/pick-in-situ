@@ -54,9 +54,9 @@
         {
           "repoPath": "modules/site.js",
           "driveFileId": "1NksuXU3DfubSFZF-GLjhxVFqgHBjvW8U",
-          "driveModifiedTime": "2026-07-30T06:52:41.575Z",
-          "baseCommit": "146d3f2",
-          "note": "Sync 30/07 (9e passe) : découpe orthophoto non bloquante (_applyClipAsync + indicateur « Calcul de la découpe… », suspension/debounce 500 ms pendant le calage IFC via _suspendClip/_scheduleClipRefresh) + _localToUVraw (UV IFC sans clamp, rejet des triangles hors cadre). 8e passe précédente : teinte sépia du bâti hors UF. Drive seul modifié, appliqué sans conflit (node --check OK)."
+          "driveModifiedTime": "2026-07-30T11:42:38.223Z",
+          "baseCommit": "f24d6d7",
+          "note": "Sync 30/07 (10e passe) : export BIM GLB/OBJ du terrain texturé + bâtiments IGN (exportBIM, _glbBuild glTF 2.0, _zipStore/_crc32 pour OBJ+MTL+PNG ArchiCAD, _bakeOrtho avec variante découpée UF) + bouton LiDAR HD IGN (toggleLidar/_enableLidar via BCCopcLidar, LIDAR_BASE figé à la génération). 9e passe : découpe non bloquante + UV IFC sans clamp. Symboles génération vérifiés (_appBase/_loadScript/setHint). Drive seul modifié, sans conflit (node --check OK)."
         },
         {
           "repoPath": "vendor/copc-lidar.js",
