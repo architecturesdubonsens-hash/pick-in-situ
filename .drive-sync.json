@@ -54,9 +54,9 @@
         {
           "repoPath": "modules/site.js",
           "driveFileId": "1NksuXU3DfubSFZF-GLjhxVFqgHBjvW8U",
-          "driveModifiedTime": "2026-07-30T11:42:38.223Z",
-          "baseCommit": "f24d6d7",
-          "note": "Sync 30/07 (10e passe) : export BIM GLB/OBJ du terrain texturé + bâtiments IGN (exportBIM, _glbBuild glTF 2.0, _zipStore/_crc32 pour OBJ+MTL+PNG ArchiCAD, _bakeOrtho avec variante découpée UF) + bouton LiDAR HD IGN (toggleLidar/_enableLidar via BCCopcLidar, LIDAR_BASE figé à la génération). 9e passe : découpe non bloquante + UV IFC sans clamp. Symboles génération vérifiés (_appBase/_loadScript/setHint). Drive seul modifié, sans conflit (node --check OK)."
+          "driveModifiedTime": "2026-07-30T12:56:23.497Z",
+          "baseCommit": "64ec797",
+          "note": "Sync 30/07 (11e passe) : occultation du nuage LiDAR sous les IFC (_lidarOcclude/_ifcMaskImageData, branché dans _applyClip) + empreinte IFC robuste aux sommets aberrants (_ifcFootprintTrisUV en 2 passages, rejet au-delà de max(60 m, 8×médiane)) + bbox LiDAR recalé sur l'orthophoto via _wgs84ToL93 et densité adaptative + réordonnancement du tracé de coupe. 10e passe : export BIM GLB/OBJ + LiDAR HD. Drive seul modifié, sans conflit (node --check OK, symboles _wgs84ToL93/_margePx vérifiés)."
         },
         {
           "repoPath": "vendor/copc-lidar.js",
