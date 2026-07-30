@@ -54,9 +54,9 @@
         {
           "repoPath": "modules/site.js",
           "driveFileId": "1NksuXU3DfubSFZF-GLjhxVFqgHBjvW8U",
-          "driveModifiedTime": "2026-07-29T14:40:59.086Z",
-          "baseCommit": "1b663ba",
-          "note": "Sync 29/07 (7e passe) : découpe orthophoto par emprise IFC exacte (union de triangles projetés, remplace l'enveloppe convexe) + catégorisation terrain/végétation/bâti des éléments IFC (_ifcCategorie/_catOf) — exclut le maillage de terrain IFC de la découpe et de la façade projetée, retire les faces devant le plan de coupe, rend la végétation en silhouette translucide. Appliqué sans conflit."
+          "driveModifiedTime": "2026-07-30T06:26:38.826Z",
+          "baseCommit": "1c64ae6",
+          "note": "Sync 30/07 (8e passe) : teinte sépia du bâti hors unité foncière (_dansUF, test pair-impair sur D.ufLoops multi-parties/enclaves) pour faire ressortir les volumes du projet — plage claire resserrée hors UF, ordre de tracé profil terrain avant les IFC coupés, calque DXF séparé IFC_MASQUE_HORS_UF. Drive seul modifié, appliqué sans conflit (node --check OK)."
         },
         {
           "repoPath": "vendor/copc-lidar.js",
