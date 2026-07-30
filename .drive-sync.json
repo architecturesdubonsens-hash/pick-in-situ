@@ -54,9 +54,9 @@
         {
           "repoPath": "modules/site.js",
           "driveFileId": "1NksuXU3DfubSFZF-GLjhxVFqgHBjvW8U",
-          "driveModifiedTime": "2026-07-30T06:26:38.826Z",
-          "baseCommit": "1c64ae6",
-          "note": "Sync 30/07 (8e passe) : teinte sépia du bâti hors unité foncière (_dansUF, test pair-impair sur D.ufLoops multi-parties/enclaves) pour faire ressortir les volumes du projet — plage claire resserrée hors UF, ordre de tracé profil terrain avant les IFC coupés, calque DXF séparé IFC_MASQUE_HORS_UF. Drive seul modifié, appliqué sans conflit (node --check OK)."
+          "driveModifiedTime": "2026-07-30T06:52:41.575Z",
+          "baseCommit": "146d3f2",
+          "note": "Sync 30/07 (9e passe) : découpe orthophoto non bloquante (_applyClipAsync + indicateur « Calcul de la découpe… », suspension/debounce 500 ms pendant le calage IFC via _suspendClip/_scheduleClipRefresh) + _localToUVraw (UV IFC sans clamp, rejet des triangles hors cadre). 8e passe précédente : teinte sépia du bâti hors UF. Drive seul modifié, appliqué sans conflit (node --check OK)."
         },
         {
           "repoPath": "vendor/copc-lidar.js",
