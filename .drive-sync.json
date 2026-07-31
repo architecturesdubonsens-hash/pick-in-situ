@@ -54,9 +54,9 @@
         {
           "repoPath": "modules/site.js",
           "driveFileId": "1NksuXU3DfubSFZF-GLjhxVFqgHBjvW8U",
-          "driveModifiedTime": "2026-07-31T07:15:22.530Z",
-          "baseCommit": "1879642",
-          "note": "Sync 31/07 (13e passe) : clip UF de l'empreinte IFC (_ifcFootprintTrisUV rejette les triangles entièrement hors D.ufLoops via _dansUF, en plus du rejet médian) + densité LiDAR plus fine (maxLevel 6/5/4/3 selon l'emprise + maxPoints 3,5 M) + soustraction de l'enveloppe IFC enterrée au poché terrain en coupe (evenodd, la terre s'arrête au nu du bâti dans les sous-sols). Commit groupé avec vendor/copc-lidar.js (interdépendants). Drive seul modifié, sans conflit (node --check OK)."
+          "driveModifiedTime": "2026-07-31T09:35:42.764Z",
+          "baseCommit": "b1892f4",
+          "note": "Sync 31/07 (14e passe) : bornage UF de la découpe IFC côté canvas (_traceUFClip + clip evenodd dans _buildUFMask et _ifcMaskImageData, rogne les triangles à cheval sur la limite parcellaire) + enveloppe IFC enterrée en coupe extraite en fonction pure partagée _coupeIfcBands, remplie en blanc opaque et répliquée dans l'export PDF (dlCoupePDF) pour parité écran/PDF. 13e passe : octree COPC profond + clip UF empreinte + poché creusé. Drive seul modifié, sans conflit (node --check OK)."
         },
         {
           "repoPath": "vendor/copc-lidar.js",
