@@ -54,9 +54,9 @@
         {
           "repoPath": "modules/site.js",
           "driveFileId": "1NksuXU3DfubSFZF-GLjhxVFqgHBjvW8U",
-          "driveModifiedTime": "2026-07-31T09:35:42.764Z",
-          "baseCommit": "b1892f4",
-          "note": "Sync 31/07 (14e passe) : bornage UF de la découpe IFC côté canvas (_traceUFClip + clip evenodd dans _buildUFMask et _ifcMaskImageData, rogne les triangles à cheval sur la limite parcellaire) + enveloppe IFC enterrée en coupe extraite en fonction pure partagée _coupeIfcBands, remplie en blanc opaque et répliquée dans l'export PDF (dlCoupePDF) pour parité écran/PDF. 13e passe : octree COPC profond + clip UF empreinte + poché creusé. Drive seul modifié, sans conflit (node --check OK)."
+          "driveModifiedTime": "2026-07-31T12:38:48.647Z",
+          "baseCommit": "19c35f8",
+          "note": "Sync 31/07 (15e passe) : ombres solaires des IFC (normalBias 0.5, castShadow+receiveShadow, sol IFC exclu du cast) + reculs/zone constructible appliqués aux seules boucles UF extérieures (_exteriorLoops/_loopIsInterior/_ringContains, exclut les parcelles enclavées) en DXF et synthèse SVG + export synthèse réglementaire renommé DXF+HTML avec téléchargement du .html. 14e passe : bornage UF canvas + enveloppe enterrée blanche. Drive seul modifié, sans conflit (node --check OK)."
         },
         {
           "repoPath": "vendor/copc-lidar.js",
