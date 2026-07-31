@@ -54,16 +54,16 @@
         {
           "repoPath": "modules/site.js",
           "driveFileId": "1NksuXU3DfubSFZF-GLjhxVFqgHBjvW8U",
-          "driveModifiedTime": "2026-07-30T16:29:56.867Z",
-          "baseCommit": "1f544de",
-          "note": "Sync 30/07 (12e passe, dernière de la journée) : export FBX ASCII 7.4 autonome (_fbxBuild, texture orthophoto embarquée en base64 Video/Content, repère Z-up, _b64 par tranches) importable comme objet unique dans ArchiCAD ; exportBIM gère fbx/obj/glb. 11e passe : occultation LiDAR sous IFC + empreinte IFC robuste. Drive seul modifié, sans conflit (node --check OK)."
+          "driveModifiedTime": "2026-07-31T07:15:22.530Z",
+          "baseCommit": "1879642",
+          "note": "Sync 31/07 (13e passe) : clip UF de l'empreinte IFC (_ifcFootprintTrisUV rejette les triangles entièrement hors D.ufLoops via _dansUF, en plus du rejet médian) + densité LiDAR plus fine (maxLevel 6/5/4/3 selon l'emprise + maxPoints 3,5 M) + soustraction de l'enveloppe IFC enterrée au poché terrain en coupe (evenodd, la terre s'arrête au nu du bâti dans les sous-sols). Commit groupé avec vendor/copc-lidar.js (interdépendants). Drive seul modifié, sans conflit (node --check OK)."
         },
         {
           "repoPath": "vendor/copc-lidar.js",
           "driveFileId": "1jAHmp6y0Ef_QJC0RTTpBe_odsIJrpJzs",
-          "driveModifiedTime": "2026-07-28T15:28:38.020Z",
-          "baseCommit": "2609a7b",
-          "note": "Nouveau 29/07 : lecture des dalles LiDAR HD IGN (COPC) en remplacement des tuiles Google 3D bloquées en zone EEE. Corrigé une accolade fermante manquante dans load() (bug de syntaxe présent dans la version Drive) avant commit."
+          "driveModifiedTime": "2026-07-31T07:08:01.519Z",
+          "baseCommit": "1879642",
+          "note": "Sync 31/07 (13e passe) : readHierarchy déréférence récursivement les pages enfants de l'octree COPC (bornées par maxLevel) → niveaux fins réellement accessibles ; decodeNode scindé en _fetchNode + decodeChunk, prefetch parallèle borné (_prefetch, concurrency 6) et budget maxPoints. Commit groupé avec modules/site.js. Antérieur (29/07) : lecture des dalles LiDAR HD IGN (COPC) en remplacement des tuiles Google 3D bloquées en zone EEE. Drive seul modifié, sans conflit (node --check OK)."
         },
         {
           "repoPath": "vendor/laz-perf.js",
