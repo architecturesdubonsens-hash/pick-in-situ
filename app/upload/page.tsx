@@ -15,7 +15,7 @@ interface ReleveBC {
   id: string;
   nom: string;
   created_at: string;
-  fichiers: { glb?: string } | null;
+  fichiers: { glb?: string; web_laz?: string; laz?: string } | null;
 }
 
 export default function UploadPage() {
@@ -24,6 +24,7 @@ export default function UploadPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [lazFile, setLazFile] = useState<File | null>(null);
   const [nomScan, setNomScan] = useState("");
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +73,24 @@ export default function UploadPage() {
       const blob = await r.blob();
       const f = new File([blob], `releve-bc-${rel.id.slice(0, 8)}.glb`, { type: "model/gltf-binary" });
       setFile(f);
+
+      // Nuage de points LAZ (web_laz, repli laz) — optionnel, non bloquant
+      const lazPath = rel.fichiers?.web_laz || rel.fichiers?.laz;
+      if (lazPath) {
+        const lr = await fetch(
+          `${BC_SUPA_URL}/storage/v1/object/authenticated/releves/${lazPath}`,
+          { headers: { apikey: BC_SUPA_ANON, Authorization: `Bearer ${BC_SUPA_ANON}` } }
+        );
+        if (lr.ok) {
+          const lazBlob = await lr.blob();
+          setLazFile(new File([lazBlob], `releve-bc-${rel.id.slice(0, 8)}.laz`, { type: "application/octet-stream" }));
+        } else {
+          setLazFile(null);
+        }
+      } else {
+        setLazFile(null);
+      }
+
       if (!nomScan) setNomScan(rel.nom || `Relevé extérieur ${rel.id.slice(0, 8)}`);
       setBcOpen(false);
     } catch (e) {
@@ -96,6 +115,7 @@ export default function UploadPage() {
     const f = e.dataTransfer.files[0];
     if (f && (f.name.endsWith(".glb") || f.name.endsWith(".gltf"))) {
       setFile(f);
+      setLazFile(null);
       if (!nomScan) setNomScan(f.name.replace(/\.(glb|gltf)$/, ""));
     } else {
       setError("Fichier non supporté — utilisez un .glb ou .gltf (export Polycam)");
@@ -142,9 +162,20 @@ export default function UploadPage() {
         .upload(meshPath, file, { contentType: "model/gltf-binary", upsert: true });
       if (ue) throw new Error(`Upload : ${ue.message}`);
 
+      // Upload du nuage de points LAZ (si importé depuis un relevé BC-Archi)
+      let pointsLazPath: string | null = null;
+      if (lazFile) {
+        setProgress(70);
+        pointsLazPath = `${finalChantierId}/${scan.id}/points.laz`;
+        const { error: lue } = await supabase.storage
+          .from("pis-scans")
+          .upload(pointsLazPath, lazFile, { contentType: "application/octet-stream", upsert: true });
+        if (lue) throw new Error(`Upload nuage : ${lue.message}`);
+      }
+
       // Mettre à jour le scan
       setProgress(85);
-      await db.from("scans").update({ mesh_path: meshPath, status: "ready" }).eq("id", scan.id);
+      await db.from("scans").update({ mesh_path: meshPath, points_laz_path: pointsLazPath, status: "ready" }).eq("id", scan.id);
 
       setProgress(100);
       router.push(`/chantier/${finalChantierId}`);
@@ -191,7 +222,7 @@ export default function UploadPage() {
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
-            if (f) { setFile(f); if (!nomScan) setNomScan(f.name.replace(/\.(glb|gltf)$/, "")); }
+            if (f) { setFile(f); setLazFile(null); if (!nomScan) setNomScan(f.name.replace(/\.(glb|gltf)$/, "")); }
           }}
         />
         {file ? (

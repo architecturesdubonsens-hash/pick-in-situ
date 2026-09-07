@@ -56,6 +56,7 @@ export interface Scan {
   status: ScanStatus;
   roomplan_path: string | null;
   mesh_path: string | null;
+  points_laz_path: string | null;
   offset_x: number;
   offset_y: number;
   offset_z: number;
@@ -66,5 +67,9 @@ export interface Scan {
 }
 
 export function meshPublicUrl(path: string) {
+  return supabase.storage.from("pis-scans").getPublicUrl(path).data.publicUrl;
+}
+
+export function pointsPublicUrl(path: string) {
   return supabase.storage.from("pis-scans").getPublicUrl(path).data.publicUrl;
 }
