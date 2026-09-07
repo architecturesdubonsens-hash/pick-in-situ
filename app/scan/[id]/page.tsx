@@ -21,8 +21,15 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
   const data = MOCK_DATA[id] ?? MOCK_DATA["demo-appartement"];
   const [modelUrls, setModelUrls] = useState<{ glb?: string; laz?: string }>({});
   useEffect(() => {
-    db.from("scans").select("mesh_path, points_laz_path").eq("id", id).maybeSingle()
-      .then(({ data: s }) => { if (!s) return; setModelUrls({ glb: s.mesh_path ? meshPublicUrl(s.mesh_path) : undefined, laz: s.points_laz_path ? pointsPublicUrl(s.points_laz_path) : undefined }); }).catch(() => {});
+    let actif = true;
+    (async () => {
+      try {
+        const { data: s } = await db.from("scans").select("mesh_path, points_laz_path").eq("id", id).maybeSingle();
+        if (!actif || !s) return;
+        setModelUrls({ glb: s.mesh_path ? meshPublicUrl(s.mesh_path) : undefined, laz: s.points_laz_path ? pointsPublicUrl(s.points_laz_path) : undefined });
+      } catch { /* repli demo */ }
+    })();
+    return () => { actif = false; };
   }, [id]);
 
   return (
