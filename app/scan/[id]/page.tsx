@@ -2,7 +2,8 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
+import { db, meshPublicUrl, pointsPublicUrl } from "@/lib/supabase";
 
 const Viewer3D = dynamic(() => import("@/components/Viewer3D"), { ssr: false });
 
@@ -18,6 +19,11 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
   const { id } = use(params);
   const [view, setView] = useState<"3d" | "plan">("3d");
   const data = MOCK_DATA[id] ?? MOCK_DATA["demo-appartement"];
+  const [modelUrls, setModelUrls] = useState<{ glb?: string; laz?: string }>({});
+  useEffect(() => {
+    db.from("scans").select("mesh_path, points_laz_path").eq("id", id).maybeSingle()
+      .then(({ data: s }) => { if (!s) return; setModelUrls({ glb: s.mesh_path ? meshPublicUrl(s.mesh_path) : undefined, laz: s.points_laz_path ? pointsPublicUrl(s.points_laz_path) : undefined }); }).catch(() => {});
+  }, [id]);
 
   return (
     <div className="h-[calc(100vh-56px)] flex flex-col">
@@ -53,7 +59,7 @@ export default function ScanPage({ params }: { params: Promise<{ id: string }> }
         {/* Viewer principal */}
         <div className="flex-1 relative">
           {view === "3d" ? (
-            <Viewer3D />
+            <Viewer3D glbUrl={modelUrls.glb} lazUrl={modelUrls.laz} />
           ) : (
             <div className="w-full h-full flex items-center justify-center bg-slate-100">
               <div className="text-center text-slate-400">
