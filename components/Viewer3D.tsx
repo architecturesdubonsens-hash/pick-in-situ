@@ -10,10 +10,7 @@ interface Viewer3DProps {
   lazUrl?: string;
 }
 
-// Loaders loaders.gl chargés dynamiquement depuis esm.sh : absents du
-// package.json (dépendances lourdes) et nécessaires uniquement côté client.
-const LOADERS_CORE_URL = "https://esm.sh/@loaders.gl/core@4.2.0";
-const LOADERS_LAS_URL = "https://esm.sh/@loaders.gl/las@4.2.0";
+// Loaders loaders.gl importés comme dépendance npm (package.json) ; chargés à la demande.
 
 export default function Viewer3D({ glbUrl, lazUrl }: Viewer3DProps) {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -109,15 +106,15 @@ export default function Viewer3D({ glbUrl, lazUrl }: Viewer3DProps) {
     async function loadLaz(url: string) {
       try {
         const [core, las] = await Promise.all([
-          import(LOADERS_CORE_URL),
-          import(LOADERS_LAS_URL),
+          import("@loaders.gl/core"),
+          import("@loaders.gl/las"),
         ]);
         // fp64 obligatoire : coordonnées UTM (northing ~5 000 000 m) — en
         // Float32 l ulp vaut 0,5 m → nuage quantifié en lanières (fix PickInSitu)
         const data = await core.parse(
           await fetch(url).then((r) => r.arrayBuffer()),
           las.LASLoader,
-          { las: { fp64: true } },
+          { las: { fp64: true, worker: false } },
         );
 
         const pos = data.attributes?.POSITION?.value as ArrayLike<number> | undefined;
