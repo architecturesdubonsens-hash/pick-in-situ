@@ -114,7 +114,7 @@ export default function Viewer3D({ glbUrl, lazUrl }: Viewer3DProps) {
         const data = await core.parse(
           await fetch(url).then((r) => r.arrayBuffer()),
           las.LASLoader,
-          { las: { fp64: true, worker: false } },
+          { worker: false, las: { fp64: true } },
         );
 
         const pos = data.attributes?.POSITION?.value as ArrayLike<number> | undefined;
