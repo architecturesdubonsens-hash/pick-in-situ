@@ -2,4 +2,4 @@
 -- Le scan Pick In Situ acquiert un nuage de points (relevé photogrammétrique, LAZ léger),
 -- en plus du maillage GLB. On ajoute la colonne qui référence le chemin du nuage dans le
 -- bucket "pis-scans".
-ALTER TABLE IF EXISTS scans ADD COLUMN IF NOT EXISTS points_laz_path text;
+ALTER TABLE IF EXISTS pick_in_situ.scans ADD COLUMN IF NOT EXISTS points_laz_path text;
