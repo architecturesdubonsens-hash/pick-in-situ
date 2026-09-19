@@ -42,3 +42,6 @@ supabase/.temp/
 
 .vercel
 .env*
+
+# Telemetrie cadastre (JEV-CAD-5) : journal runtime, non versionne
+data/observations-cadastre.jsonl

@@ -1,0 +1,122 @@
+[
+  {
+    "id": "CAD_01_LOTISSEMENT_GRAND",
+    "parcelle": "Section AB n° 142",
+    "data": "Parcelle de 2 400 m² en zone UB (résidentielle dense). Bâti existant: pavillon de 90 m² d'emprise situé en limite nord. Façade sur voie publique: 48 mètres linéaires. Accès indépendant possible. Hors ABF et hors zone inondable.",
+    "ground_truth": { "potentiel_division": true, "typologie": "division_lot_a_batir", "recours_abf": false }
+  },
+  {
+    "id": "CAD_02_CENTRE_HISTORIQUE_ABF",
+    "parcelle": "Section AK n° 25",
+    "data": "Parcelle de 320 m² en zone UA (centre historique médiéval). Immeuble R+2 existant couvrant 280 m² au sol (CES = 0.88). Périmètre 500m Monument Historique (Cathédrale). Façade sur rue 12 m.",
+    "ground_truth": { "potentiel_division": false, "typologie": "surelevation_extension", "recours_abf": true }
+  },
+  {
+    "id": "CAD_03_ZONE_AGRICOLE_A",
+    "parcelle": "Section ZI n° 88",
+    "data": "Parcelle agricole nue de 15 000 m² en zone A stricte du PLU. Aucune activité d'exploitation agricole liée au demandeur. Terrain plat bordé par chemin rural.",
+    "ground_truth": { "potentiel_division": false, "typologie": "inconstructible_espace_protege", "recours_abf": false }
+  },
+  {
+    "id": "CAD_04_ZONE_NATURELLE_N",
+    "parcelle": "Section YB n° 12",
+    "data": "Parcelle boisée de 8 500 m² en zone N (espace naturel remarquable et corridor écologique). ZNIEFF type 1. Bâti existant: aucun.",
+    "ground_truth": { "potentiel_division": false, "typologie": "inconstructible_espace_protege", "recours_abf": false }
+  },
+  {
+    "id": "CAD_05_DENSIFICATION_COLLECTIVE",
+    "parcelle": "Section CM n° 301",
+    "data": "Terrain de 3 800 m² en zone UBa (axe structurant de transport, densité autorisée R+4, CES 0.60). Bâti existant: hangar désaffecté à démolir. Façade sur avenue: 65 m. Réseaux EU/AEP dimensionnés.",
+    "ground_truth": { "potentiel_division": true, "typologie": "densification_collective", "recours_abf": false }
+  },
+  {
+    "id": "CAD_06_PARCELLE_ENCLAVEE_PETITE",
+    "parcelle": "Section BC n° 77",
+    "data": "Parcelle de 180 m² en fond de cour, sans façade directe sur voie publique (passage de servitude de 1.20 m). Maison de ville existante de 80 m² au sol.",
+    "ground_truth": { "potentiel_division": false, "typologie": "surelevation_extension", "recours_abf": false }
+  },
+  {
+    "id": "CAD_07_DIVISION_PAVILLONNAIRE_DOUBLE",
+    "parcelle": "Section DE n° 210",
+    "data": "Parcelle d'angle de 1 650 m² en zone UC (tissu pavillonnaire). Maison des années 70 au centre. Deux façades sur voirie de 35 m et 40 m. Règlement PLU: lot minimum 600 m².",
+    "ground_truth": { "potentiel_division": true, "typologie": "division_lot_a_batir", "recours_abf": false }
+  },
+  {
+    "id": "CAD_08_ZONE_INONDABLE_ROUGE",
+    "parcelle": "Section PR n° 4",
+    "data": "Parcelle de 1 200 m² en zone rouge du PPRI Val de Loire. Aléa fort immersion > 1 m. Interdiction stricte de créer de nouveaux logements ou de diviser le sol.",
+    "ground_truth": { "potentiel_division": false, "typologie": "inconstructible_espace_protege", "recours_abf": false }
+  },
+  {
+    "id": "CAD_09_FAUBOURG_COMMERCIAL_ABF",
+    "parcelle": "Section AP n° 52",
+    "data": "Terrain de 950 m² en zone UB, situé dans le périmètre de protection d'un pont du XVIIIe siècle classé MH. Bâtiment d'activités obsolète de 300 m². Façade rue 22 m.",
+    "ground_truth": { "potentiel_division": true, "typologie": "densification_collective", "recours_abf": true }
+  },
+  {
+    "id": "CAD_10_SURELEVATION_IMMEUBLE",
+    "parcelle": "Section AH n° 109",
+    "data": "Immeuble R+1 en pierre de taille en zone UA. Hauteur actuelle 7 m. Hauteur maximale autorisée au PLU: 18 m (R+4). Toit terrasse existant. Aucune possibilité d'extension au sol.",
+    "ground_truth": { "potentiel_division": false, "typologie": "surelevation_extension", "recours_abf": false }
+  },
+  {
+    "id": "CAD_11_PARCELLE_1AU_URBANISABLE",
+    "parcelle": "Section AU n° 1",
+    "data": "Grande emprise de 22 000 m² en zone 1AU (à urbaniser sous forme d'opération d'aménagement d'ensemble). Réseaux en bordure de zone. Création de voirie et rétrocession prévues.",
+    "ground_truth": { "potentiel_division": true, "typologie": "densification_collective", "recours_abf": false }
+  },
+  {
+    "id": "CAD_12_PETIT_LOT_SATURÉ",
+    "parcelle": "Section BE n° 44",
+    "data": "Terrain de 250 m² en zone UC. Pavillon de 130 m² au sol, garage de 30 m². Emprise totale bâtie = 64% (plafond PLU = 40%). Aucun droit à construire résiduel.",
+    "ground_truth": { "potentiel_division": false, "typologie": "inconstructible_espace_protege", "recours_abf": false }
+  },
+  {
+    "id": "CAD_13_DIVISION_3_LOTS",
+    "parcelle": "Section CT n° 8",
+    "data": "Propriété de 3 600 m² le long d'une départementale en zone UB. Façade linéaire de 90 mètres. Maison bourgeoise à conserver sur 1 200 m². Deux parcelles à détacher de 1 200 m² chacune.",
+    "ground_truth": { "potentiel_division": true, "typologie": "division_lot_a_batir", "recours_abf": false }
+  },
+  {
+    "id": "CAD_14_COEUR_ILOT_ABF",
+    "parcelle": "Section AN n° 80",
+    "data": "Jardin en cœur d'îlot de 600 m² en zone UA, accessible uniquement par un porche cocher classé Monument Historique de 2.20 m de hauteur. Périmètre ABF direct.",
+    "ground_truth": { "potentiel_division": false, "typologie": "surelevation_extension", "recours_abf": true }
+  },
+  {
+    "id": "CAD_15_DENT_CREUSE",
+    "parcelle": "Section DX n° 15",
+    "data": "Parcelle nue de 450 m² entre deux pignons aveugles R+3 en tissu urbain dense. Façade 15 m. Viabilisée sur rue.",
+    "ground_truth": { "potentiel_division": false, "typologie": "densification_collective", "recours_abf": false }
+  },
+  {
+    "id": "CAD_16_ESPACE_BOISE_EBC",
+    "parcelle": "Section EB n° 3",
+    "data": "Terrain de 4 000 m² classé Espace Boisé Classé (EBC) au titre de l'article L. 113-1 du code de l'urbanisme. Rejet de plein droit de tout défrichement et de toute division bâtie.",
+    "ground_truth": { "potentiel_division": false, "typologie": "inconstructible_espace_protege", "recours_abf": false }
+  },
+  {
+    "id": "CAD_17_PARCELLE_LONGUEUR_BANDE",
+    "parcelle": "Section FL n° 92",
+    "data": "Parcelle en lanière de 2 800 m² (largeur 14 m x longueur 200 m). Maison en front de rue. Desserte interne en impasse possible pour détacher 2 maisons en second rang.",
+    "ground_truth": { "potentiel_division": true, "typologie": "division_lot_a_batir", "recours_abf": false }
+  },
+  {
+    "id": "CAD_18_BATIMENT_INDUSTRIEL_ABF",
+    "parcelle": "Section IN n° 60",
+    "data": "Friche industrielle de 5 500 m² aux abords d'une ancienne filature inscrite à l'inventaire des MH. Zone d'activité à requalifier en logements.",
+    "ground_truth": { "potentiel_division": true, "typologie": "densification_collective", "recours_abf": true }
+  },
+  {
+    "id": "CAD_19_JARDIN_URBAIN_RESIDUEL",
+    "parcelle": "Section JU n° 11",
+    "data": "Bande de terrain de 90 m² (largeur 3.5 m). Servitude de vue et prospect réciproque. Inconstructible pour tout bâtiment autonome.",
+    "ground_truth": { "potentiel_division": false, "typologie": "inconstructible_espace_protege", "recours_abf": false }
+  },
+  {
+    "id": "CAD_20_LOT_DOUBLE_ACCES",
+    "parcelle": "Section LA n° 200",
+    "data": "Parcelle traversante de 1 900 m² reliant deux rues parallèles (rue Haute et rue Basse). Pavillon existant sur rue Haute. Détachement direct sur rue Basse d'une parcelle viabilisée de 800 m².",
+    "ground_truth": { "potentiel_division": true, "typologie": "division_lot_a_batir", "recours_abf": false }
+  }
+]

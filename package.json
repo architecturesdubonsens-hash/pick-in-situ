@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:las": "node tests/test-las-parse.mjs"
+    "test:las": "node tests/test-las-parse.mjs",
+    "test:cadastre": "node tests/test-cadastre-prefiltre.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",
