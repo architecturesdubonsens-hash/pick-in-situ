@@ -1348,16 +1348,7 @@ async function triggerJob() {
   if (!r.ok || data.error) throw new Error(data.error);
   jobId = data.id;
   document.getElementById('job-id-display').textContent = jobId.slice(0, 16) + '…';
-  // Traçabilité : sans le job id en base, impossible de retrouver les logs
-  // RunPod d'un relevé après coup
-  fetch(`${SUPA_URL}/rest/v1/releves?id=eq.${releveId}`, {
-    method: 'PATCH',
-    headers: {
-      'apikey': SUPA_ANON, 'Authorization': `Bearer ${SUPA_ANON}`,
-      'Content-Type': 'application/json', 'Prefer': 'return=minimal',
-    },
-    body: JSON.stringify({ runpod_job_id: jobId }),
-  }).catch(() => {});
+  // Traçabilité : gérée côté serveur dans /api/odm-proxy (écrite dès la soumission avec clé service)
   logProc(`Job lancé : ${jobId}`, 'ok');
   document.getElementById('proc-label').textContent = "En file d'attente GPU…";
 }
@@ -1391,7 +1382,10 @@ async function pollUntilDone() {
           document.getElementById('proc-bar').style.width = '100%';
           document.getElementById('proc-bar').classList.add('complete');
           document.getElementById('proc-label').textContent = 'Traitement terminé ✓';
-          logProc('Traitement ODM terminé avec succès', 'ok');
+          const gpuSec = data.executionTime ? Math.round(data.executionTime / 1000) : null;
+          const queueSec = data.delayTime ? Math.round(data.delayTime / 1000) : null;
+          const infoGpu = gpuSec != null ? ` (GPU: ${gpuSec}s${queueSec != null ? `, attente: ${queueSec}s` : ''})` : '';
+          logProc(`Traitement ODM terminé avec succès${infoGpu}`, 'ok');
           showResults(data.output);
           resolve();
         } else if (status === 'FAILED' || status === 'CANCELLED') {
