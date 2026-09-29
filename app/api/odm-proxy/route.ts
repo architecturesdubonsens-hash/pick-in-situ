@@ -1,13 +1,22 @@
-// Proxy photogrammétrie — RunPod Serverless + Supabase Storage
-// Porté depuis CapInSitu (app-v3/api/odm-proxy.js) le 14/07/2026, logique inchangée.
+// Proxy photogrammétrie — RunPod Serverless + Supabase Storage + Traçabilité GPU (INSTR-2)
+// Porté depuis CapInSitu (app-v3/api/odm-proxy.js) le 14/07/2026.
+// Instrumenté pour traçabilité COGS, temps GPU et état terminal garanti le 29/09/2026.
 // Variables d'environnement Vercel requises :
 //   BC_KEY              → clé partagée client (pickinsitu)
 //   RUNPOD_API_KEY      → clé API RunPod (Settings → API Keys)
-//   RUNPOD_ENDPOINT_ID  → alfkh0yfkkfukq (endpoint propre 01/07 ; ancien ppmj21flholosp bloqué à ~50s)
+//   RUNPOD_ENDPOINT_ID  → alfkh0yfkkfukq (endpoint propre 01/07)
 //   SUPABASE_URL        → https://fnfrusblyzndbzckkfir.supabase.co
 //   SUPABASE_SERVICE_KEY → service_role key (Supabase Dashboard → Settings → API)
 
 import { NextRequest, NextResponse } from "next/server";
+import {
+  journaliserLancement,
+  enregistrerDemarrageReleve,
+  finaliserAppelJournal,
+  enregistrerFinReleve,
+  nettoyerJobsExpires,
+  calculerCoutReleves,
+} from "@/lib/runpod-instrumentation";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -74,7 +83,7 @@ async function handle(req: NextRequest) {
       return json({ signedURL: fullURL, token: data.token });
     }
 
-    // ── Lance un job RunPod ────────────────────────────────────────────────────
+    // ── Lance un job RunPod avec traçabilité GPU immédiate (Critère a & f) ───
     if (action === "runpod-start") {
       let body: Record<string, unknown> = {};
       if (req.method === "POST") {
@@ -89,7 +98,8 @@ async function handle(req: NextRequest) {
       if (!body.releve_id && params.get("releve_id")) {
         body.releve_id = params.get("releve_id");
       }
-      if (!body.releve_id) return json({ error: "releve_id manquant" }, 400);
+      const releveId = body.releve_id as string;
+      if (!releveId) return json({ error: "releve_id manquant" }, 400);
 
       const r = await fetch(`https://api.runpod.ai/v2/${RUNPOD_EP}/run`, {
         method: "POST",
@@ -97,26 +107,66 @@ async function handle(req: NextRequest) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${RUNPOD_KEY}`,
         },
-        // policy.executionTimeout (ms) : force le timeout, écrase le défaut endpoint.
-        // Sans ça, les jobs mouraient à ~75s ("job timed out after 1 retries") quelle
-        // que soit l'étape ODM — un execution timeout effectif bien < 3600s.
-        // ttl : durée max en file avant prise en charge (cold start lents image GPU).
-        // 45 min max : un run HD normal fait 13-17 min, le retry de dégradation
-        // ×2 au pire ~35 min. Au-delà = pathologique → tuer tôt plutôt que
-        // facturer (vécu 08/07 : >5h consommées sur un job silencieux).
         body: JSON.stringify({
           input: body,
           policy: { executionTimeout: 2700000, ttl: 1800000 },
         }),
       });
+
       if (!r.ok) {
         const txt = await r.text();
+        // Même en cas d'erreur de lancement, traçabilité assurée (issue echec)
+        await finaliserAppelJournal({
+          supaUrl: SUPA_URL,
+          supaKey: SUPA_KEY,
+          releveId,
+          runpodJobId: "non_attribue",
+          status: "FAILED",
+          error: `Erreur API RunPod start (HTTP ${r.status}) : ${txt.slice(0, 200)}`,
+        });
+        await enregistrerFinReleve({
+          supaUrl: SUPA_URL,
+          supaKey: SUPA_KEY,
+          releveId,
+          runpodJobId: "non_attribue",
+          status: "FAILED",
+          error: `RunPod start: ${txt.slice(0, 200)}`,
+        });
         return json({ error: `RunPod start: ${txt.slice(0, 200)}` }, r.status);
       }
-      return json(await r.json());
+
+      const runpodData = await r.json();
+      const jobId = runpodData.id as string;
+
+      // ── CRITÈRE (a) & (f) : Écriture serveur immédiate avant toute attente ──
+      // 1. Journalisation dans appels_fournisseurs (RPC journaliser_appel)
+      const opts = (body.options as Record<string, unknown>) || {};
+      const journalId = await journaliserLancement({
+        supaUrl: SUPA_URL,
+        supaKey: SUPA_KEY,
+        releveId,
+        runpodJobId: jobId,
+        preset: typeof opts.preset === "string" ? opts.preset : undefined,
+        nbPhotos: typeof opts.nb_photos === "number" ? opts.nb_photos : undefined,
+        options: opts,
+        endpointId: RUNPOD_EP,
+      });
+
+      // 2. Écriture immédiate du runpod_job_id et statut processing sur public.releves
+      await enregistrerDemarrageReleve(
+        {
+          supaUrl: SUPA_URL,
+          supaKey: SUPA_KEY,
+          releveId,
+          runpodJobId: jobId,
+        },
+        journalId
+      );
+
+      return json({ ...runpodData, journal_id: journalId });
     }
 
-    // ── Interroge le statut d'un job RunPod ───────────────────────────────────
+    // ── Interroge le statut d'un job RunPod + Enregistrement temps GPU (Critère b)
     if (action === "runpod-status") {
       const jobId = params.get("jobId");
       if (!jobId) return json({ error: "jobId requis" }, 400);
@@ -130,7 +180,39 @@ async function handle(req: NextRequest) {
         const txt = await r.text();
         return json({ error: `RunPod status: ${txt.slice(0, 200)}` }, r.status);
       }
-      return json(await r.json());
+      const data = await r.json();
+
+      // ── CRITÈRE (b) : Enregistrement métrologique dès état terminal ───────
+      const st = data.status;
+      if (st === "COMPLETED" || st === "FAILED" || st === "CANCELLED") {
+        const execMs = typeof data.executionTime === "number" ? data.executionTime : undefined;
+        const delayMs = typeof data.delayTime === "number" ? data.delayTime : undefined;
+        const errMsg = data.error || data.output?.error || data.output?.detail || undefined;
+
+        // Mise à jour de public.releves (temps GPU, durée totale, statut terminal)
+        await enregistrerFinReleve({
+          supaUrl: SUPA_URL,
+          supaKey: SUPA_KEY,
+          runpodJobId: jobId,
+          status: st,
+          executionTimeMs: execMs,
+          delayTimeMs: delayMs,
+          error: errMsg,
+        });
+
+        // Finalisation dans appels_fournisseurs (RPC finaliser_appel)
+        await finaliserAppelJournal({
+          supaUrl: SUPA_URL,
+          supaKey: SUPA_KEY,
+          runpodJobId: jobId,
+          status: st,
+          executionTimeMs: execMs,
+          delayTimeMs: delayMs,
+          error: errMsg,
+        });
+      }
+
+      return json(data);
     }
 
     // ── Annule un job RunPod ──────────────────────────────────────────────────
@@ -145,7 +227,45 @@ async function handle(req: NextRequest) {
           headers: { Authorization: `Bearer ${RUNPOD_KEY}` },
         }
       );
-      return json(await r.json());
+      const data = await r.json();
+
+      // Marquer le relevé comme annulé
+      await enregistrerFinReleve({
+        supaUrl: SUPA_URL,
+        supaKey: SUPA_KEY,
+        runpodJobId: jobId,
+        status: "CANCELLED",
+        error: "Job annulé par demande utilisateur (runpod-cancel)",
+      });
+      await finaliserAppelJournal({
+        supaUrl: SUPA_URL,
+        supaKey: SUPA_KEY,
+        runpodJobId: jobId,
+        status: "CANCELLED",
+        error: "Job annulé par demande utilisateur (runpod-cancel)",
+      });
+
+      return json(data);
+    }
+
+    // ── Watchdog : Nettoie les jobs expirés ou abandonnés (Critère c) ─────────
+    if (action === "cleanup-expired") {
+      const maxAge = Number(params.get("maxAgeHours")) || 2;
+      const result = await nettoyerJobsExpires({
+        supaUrl: SUPA_URL,
+        supaKey: SUPA_KEY,
+        runpodKey: RUNPOD_KEY,
+        runpodEp: RUNPOD_EP,
+        maxAgeHours: maxAge,
+      });
+      return json(result);
+    }
+
+    // ── Métriques COGS : Coût et temps GPU par relevé livré (Critère d) ──────
+    if (action === "cost-stats") {
+      const fromDate = params.get("fromDate") || undefined;
+      const stats = await calculerCoutReleves(SUPA_URL, SUPA_KEY, fromDate);
+      return json(stats || { error: "Impossible de calculer les statistiques" });
     }
 
     return json({ error: `Action inconnue: ${action}` }, 400);
