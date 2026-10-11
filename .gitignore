@@ -45,3 +45,8 @@ supabase/.temp/
 
 # Telemetrie cadastre (JEV-CAD-5) : journal runtime, non versionne
 data/observations-cadastre.jsonl
+# Journal du coupe-circuit Jev : ecrit par lib_jev a l execution, jamais une source.
+lib_jev/observations.jsonl
+# Cache bytecode Python, produit par le client : jamais une source.
+__pycache__/
+*.pyc
