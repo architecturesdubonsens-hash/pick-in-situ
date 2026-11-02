@@ -338,7 +338,8 @@ def purge_photos_source(releve_id):
 
 
 def download_photos(releve_id, dest_dir):
-    """Télécharge toutes les photos du bucket releves/{releve_id}/photos/"""
+    """Télécharge toutes les photos du bucket releves/{releve_id}/photos/
+    avec retry robuste par image (résilient aux coupures socket/ChunkedEncodingError)."""
     r = requests.post(
         f"{SUPA_URL}/storage/v1/object/list/releves",
         headers={**supa_headers(), "Content-Type": "application/json"},
@@ -353,21 +354,39 @@ def download_photos(releve_id, dest_dir):
     photos_dir = Path(dest_dir) / "images"
     photos_dir.mkdir(parents=True, exist_ok=True)
 
+    MAX_RETRIES = 4
     for item in items:
         name = item.get("name", "")
         if not name:
             continue
         file_path = f"{releve_id}/photos/{name}"
-        dl = requests.get(
-            f"{SUPA_URL}/storage/v1/object/releves/{file_path}",
-            headers=supa_headers(), timeout=60, stream=True
-        )
-        dl.raise_for_status()
         out = photos_dir / name
-        with open(out, "wb") as f:
-            for chunk in dl.iter_content(65536):
-                f.write(chunk)
-        print(f"[BC-ARCHI] ✓ {name}", flush=True)
+
+        success = False
+        last_err = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                if out.exists():
+                    out.unlink()
+                dl = requests.get(
+                    f"{SUPA_URL}/storage/v1/object/releves/{file_path}",
+                    headers=supa_headers(), timeout=60, stream=True
+                )
+                dl.raise_for_status()
+                with open(out, "wb") as f:
+                    for chunk in dl.iter_content(65536):
+                        f.write(chunk)
+                success = True
+                print(f"[BC-ARCHI] ✓ {name}" + (f" (tentative {attempt})" if attempt > 1 else ""), flush=True)
+                break
+            except Exception as e:
+                last_err = e
+                print(f"[BC-ARCHI] ⚠️ Erreur téléchargement {name} (tentative {attempt}/{MAX_RETRIES}) : {e}", flush=True)
+                if attempt < MAX_RETRIES:
+                    time.sleep(2 * attempt)
+
+        if not success:
+            raise RuntimeError(f"Échec définitif du téléchargement de {name} après {MAX_RETRIES} tentatives : {last_err}")
 
     # Conversion automatique HEIC → JPEG (iPhone)
     convert_heic_to_jpeg(photos_dir)
