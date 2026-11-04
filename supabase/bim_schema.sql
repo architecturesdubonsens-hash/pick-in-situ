@@ -4,8 +4,20 @@
 -- DOCUMENTATION UNIQUEMENT : ce fichier reflète l'état réel du projet Supabase
 -- « Forme1 » (ojoswtbarspntovtcfsh), schéma pick_in_situ, relevé le 04/11/2026
 -- par requêtes sur information_schema, pg_constraint, pg_indexes, pg_policies et
--- role_table_grants. Ces tables ont été créées sans migration versionnée. Ne pas
--- l'exécuter tel quel sur le projet existant : il décrit ce qui existe déjà.
+-- role_table_grants.
+--
+-- Origine : ces tables ont été créées par des migrations enregistrées dans la base
+-- (supabase_migrations.schema_migrations de « Forme1 ») mais absentes de ce dépôt :
+--   20260705103156 pick_in_situ_bim_murs        20260705104642 bim_murs_decalage
+--   20260705163116 bim_ouvertures_dalles_toits  20260705171601 bim_ancres
+-- Rapprochées le 04/11/2026 du relevé ci-dessous : colonnes, valeurs par défaut,
+-- clés étrangères, politiques et droits sont identiques. La politique « tout pour
+-- tout le monde » (using true) et « grant all … to anon, authenticated » figurent
+-- dans ces migrations dès leur création : ce n'est pas une dérive, c'était écrit ainsi.
+-- Les migrations ne créent aucun index ; la table chantiers (migration
+-- 20260621090323 pick_in_situ_init) n'a pas été relue, sa description vient du relevé.
+--
+-- Ne pas l'exécuter tel quel sur le projet existant : il décrit ce qui existe déjà.
 --
 -- Il s'exécute en revanche sur une base locale vide (voir tests/rls-bim/run-local.sh,
 -- qui y ajoute des rôles et un schéma auth factices) : c'est ainsi que l'état
