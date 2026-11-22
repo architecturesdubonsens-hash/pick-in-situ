@@ -2,8 +2,13 @@
 // Porté depuis CapInSitu (app-v3/api/odm-proxy.js) le 14/07/2026, logique inchangée.
 // Variables d'environnement Vercel requises :
 //   BC_KEY              → clé partagée client (pickinsitu)
-//   RUNPOD_API_KEY      → clé API RunPod (Settings → API Keys)
+//   RUNPOD_API_KEY      → clé API RunPod (Settings → API Keys). Depuis le 22/11/2026
+//                         elle doit porter la portée « serverless:write » : le réveil
+//                         de l'endpoint passe par PATCH api.runpod.io/v2/serverless/{id}.
 //   RUNPOD_ENDPOINT_ID  → alfkh0yfkkfukq (endpoint propre 01/07 ; ancien ppmj21flholosp bloqué à ~50s)
+//   RUNPOD_WORKERS_MAX  → (optionnel) capacité remontée avant chaque job. Défaut 3.
+//   RUNPOD_REVEIL       → (optionnel) « 0 » court-circuite le réveil : le job part
+//                         directement, comme avant le 22/11/2026.
 //   SUPABASE_URL        → https://fnfrusblyzndbzckkfir.supabase.co
 //   SUPABASE_SERVICE_KEY → service_role key (Supabase Dashboard → Settings → API)
 
@@ -21,6 +26,47 @@ function json(body: unknown, status = 200) {
 
 export async function OPTIONS() {
   return new NextResponse(null, { status: 200, headers: CORS_HEADERS });
+}
+
+// ── Réveil de l'endpoint Runpod avant chaque lancement ───────────────────────
+// Politique Runpod (docs « Endpoint settings », relevée le 22/11/2026) : un
+// endpoint qui ne reçoit aucune requête voit son max workers ramené à 2 au bout
+// de 3 jours, puis à 0 au bout de 7 jours, avec un email d'avertissement. Le
+// compteur ne se réarme que sur une requête, et la remontée est manuelle.
+//
+// Conséquence constatée le 22/11/2026 : l'endpoint bc-archi-odm-clean est tombé à
+// 0 machine sans qu'aucun calcul ne soit lancé — et à 0, une requête ne démarre
+// plus de worker, donc un job soumis reste en file jusqu'à expiration du TTL au
+// lieu d'être calculé. Un relevé « pending » du 02/11 est resté dans cet état.
+//
+// D'où ce PATCH avant chaque job : il remet workers.max à RUNPOD_WORKERS_MAX
+// sans démarrer de worker (workers.min reste 0, aucun GPU n'est facturé à vide).
+// Il ne dépend d'aucun cron : c'est le lancement du calcul qui répare l'endpoint.
+const REVEIL_DESACTIVE = process.env.RUNPOD_REVEIL === "0";
+const RUNPOD_WORKERS_MAX = Number(process.env.RUNPOD_WORKERS_MAX || 3);
+
+async function reveillerEndpoint(
+  endpointId: string,
+  runpodKey: string,
+  workersMax: number
+): Promise<{ ok: true } | { ok: false; erreur: string }> {
+  try {
+    // REST v1 (rest.runpod.io/v1/endpoints/{id}) n existe plus : le nom ne résout
+    // plus (constaté le 22/11/2026). La seule voie est REST v2.
+    const r = await fetch("https://api.runpod.io/v2/serverless/" + endpointId, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + runpodKey,
+      },
+      body: JSON.stringify({ workers: { max: workersMax } }),
+    });
+    if (r.ok) return { ok: true };
+    const txt = await r.text();
+    return { ok: false, erreur: "HTTP " + r.status + " " + txt.slice(0, 200) };
+  } catch (e) {
+    return { ok: false, erreur: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 async function handle(req: NextRequest) {
@@ -90,6 +136,25 @@ async function handle(req: NextRequest) {
         body.releve_id = params.get("releve_id");
       }
       if (!body.releve_id) return json({ error: "releve_id manquant" }, 400);
+
+      // Réveil avant soumission : sans lui, un endpoint resté 7 jours sans
+      // requête (max workers = 0) accepte le job et ne le démarre jamais.
+      // On refuse plutôt le lancement : un relevé bloqué en file pendant 30 min
+      // de TTL puis abandonné est plus coûteux qu'un message clair.
+      if (!REVEIL_DESACTIVE) {
+        const reveil = await reveillerEndpoint(RUNPOD_EP, RUNPOD_KEY, RUNPOD_WORKERS_MAX);
+        if (!reveil.ok) {
+          return json(
+            {
+              error:
+                "Endpoint Runpod " + RUNPOD_EP + " non réveillé (" + reveil.erreur + "). " +
+                "Le job n'a pas été lancé pour éviter un relevé bloqué en file. " +
+                "Remonter le « max workers » de l'endpoint dans la console Runpod, puis relancer.",
+            },
+            503
+          );
+        }
+      }
 
       const r = await fetch(`https://api.runpod.ai/v2/${RUNPOD_EP}/run`, {
         method: "POST",
